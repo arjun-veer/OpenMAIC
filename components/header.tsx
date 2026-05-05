@@ -14,7 +14,6 @@ import {
 } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { useTheme } from '@/lib/hooks/use-theme';
-import { LanguageSwitcher } from './language-switcher';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { SettingsDialog } from './settings';
@@ -78,7 +77,7 @@ export function Header({ currentSceneTitle }: HeaderProps) {
       <header className="h-20 px-8 flex items-center justify-between z-10 bg-transparent gap-4">
         <div className="flex items-center gap-3 min-w-0 flex-1">
           <button
-            onClick={() => router.push('/')}
+            onClick={() => router.push('/dashboard')}
             className="shrink-0 p-2 rounded-lg text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
             title={t('generation.backToHome')}
           >
@@ -98,11 +97,6 @@ export function Header({ currentSceneTitle }: HeaderProps) {
         </div>
 
         <div className="flex items-center gap-4 bg-white/60 dark:bg-gray-800/60 backdrop-blur-md px-2 py-1.5 rounded-full border border-gray-100/50 dark:border-gray-700/50 shadow-sm shrink-0">
-          {/* Language Selector */}
-          <LanguageSwitcher onOpen={() => setThemeOpen(false)} />
-
-          <div className="w-[1px] h-4 bg-gray-200 dark:bg-gray-700" />
-
           {/* Theme Selector */}
           <div className="relative" ref={themeRef}>
             <button
@@ -125,7 +119,7 @@ export function Header({ currentSceneTitle }: HeaderProps) {
                   className={cn(
                     'w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-2',
                     theme === 'light' &&
-                      'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
+                      'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400',
                   )}
                 >
                   <Sun className="w-4 h-4" />
@@ -139,7 +133,7 @@ export function Header({ currentSceneTitle }: HeaderProps) {
                   className={cn(
                     'w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-2',
                     theme === 'dark' &&
-                      'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
+                      'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400',
                   )}
                 >
                   <Moon className="w-4 h-4" />
@@ -153,7 +147,7 @@ export function Header({ currentSceneTitle }: HeaderProps) {
                   className={cn(
                     'w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-2',
                     theme === 'system' &&
-                      'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
+                      'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400',
                   )}
                 >
                   <Monitor className="w-4 h-4" />

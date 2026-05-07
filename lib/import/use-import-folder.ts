@@ -2,6 +2,11 @@
 
 import { useCallback, useRef } from 'react';
 import { toast } from 'sonner';
+import { nanoid as makeId } from 'nanoid';
+
+const FOLDERS_KEY = 'aiguru_folders';
+const FOLDER_MAP_KEY = 'aiguru_classroom_folders';
+const FOLDER_COLORS = ['#f97316','#3b82f6','#8b5cf6','#10b981','#ec4899','#f59e0b','#06b6d4','#6366f1'];
 
 /**
  * Handles importing a folder ZIP (containing multiple classroom ZIPs + folder.json)
@@ -36,7 +41,7 @@ export function useImportFolder(onSuccess?: (count: number) => void) {
 
         const folderManifest = JSON.parse(await folderManifestFile.async('text'));
         const innerZipNames = Object.keys(outerZip.files).filter(
-          (name) => name.endsWith('.aicls') && !name.includes('/'),
+          (name) => (name.endsWith('.maic.zip') || name.endsWith('.aicls')) && !name.includes('/'),
         );
 
         if (innerZipNames.length === 0) {
@@ -46,10 +51,8 @@ export function useImportFolder(onSuccess?: (count: number) => void) {
 
         toast.loading(`Importing ${innerZipNames.length} classroom(s)…`, { id: toastId });
 
-        // Dynamically import single-classroom import logic
-        const { useImportClassroom } = await import('./use-import-classroom');
-
         let imported = 0;
+        const importedIds: string[] = [];
         for (const name of innerZipNames) {
           const innerBlob = await outerZip.files[name].async('blob');
           const innerFile = new File([innerBlob], name, { type: 'application/zip' });
@@ -126,13 +129,33 @@ export function useImportFolder(onSuccess?: (count: number) => void) {
               createdAt: now, updatedAt: now,
             })));
 
+            importedIds.push(newStageId);
             imported++;
-          } catch {
-            // Skip failed inner zips
+          } catch (err) {
+            console.error('Failed to import inner classroom zip:', name, err);
           }
         }
 
         const folderName: string = folderManifest.folderName || 'Imported Folder';
+
+        // Create the folder in localStorage and map all imported classrooms into it
+        if (imported > 0) {
+          const existingFolders: any[] = JSON.parse(localStorage.getItem(FOLDERS_KEY) ?? '[]');
+          const newFolderId = makeId();
+          existingFolders.push({
+            id: newFolderId,
+            name: folderName,
+            color: FOLDER_COLORS[existingFolders.length % FOLDER_COLORS.length],
+            createdAt: Date.now(),
+            parentId: null,
+          });
+          localStorage.setItem(FOLDERS_KEY, JSON.stringify(existingFolders));
+
+          const folderMap: Record<string, string> = JSON.parse(localStorage.getItem(FOLDER_MAP_KEY) ?? '{}');
+          for (const stageId of importedIds) folderMap[stageId] = newFolderId;
+          localStorage.setItem(FOLDER_MAP_KEY, JSON.stringify(folderMap));
+        }
+
         toast.success(`Imported ${imported} classroom(s) from "${folderName}"`, { id: toastId });
         onSuccess?.(imported);
       } catch {

@@ -3,12 +3,13 @@
 import {
   useState, useEffect, useMemo, useRef, useDeferredValue, useCallback,
 } from 'react';
+import { flushSync } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Check, ChevronRight, FolderOpen, FolderPlus, Pencil, Trash2,
   Search, Settings, Sun, Moon, Monitor, ChevronDown, ChevronUp,
-  Upload, Atom, X, Plus, Download, MoreHorizontal, Home, PackageOpen,
+  Upload, Atom, X, Plus, MoreHorizontal, Home, PackageOpen,
   ImagePlus, Copy,
 } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
@@ -32,7 +33,6 @@ import { toast } from 'sonner';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useImportClassroom } from '@/lib/import/use-import-classroom';
 import { useImportFolder } from '@/lib/import/use-import-folder';
-import { useExportFolder } from '@/lib/export/use-export-folder';
 
 const log = createLogger('Home');
 const FOLDERS_KEY = 'aiguru_folders';
@@ -187,8 +187,15 @@ function HomePage() {
   const { importing, fileInputRef, triggerFileSelect, handleFileChange } =
     useImportClassroom(loadClassrooms);
   const { fileInputRef: folderFileRef, triggerFolderSelect, handleFolderFileChange } =
-    useImportFolder(() => loadClassrooms());
-  const { exportFolderZip } = useExportFolder();
+    useImportFolder(() => {
+      // flushSync forces folderMap state to apply before classrooms load,
+      // preventing imported classrooms from flashing at root
+      flushSync(() => {
+        setFolders(loadFolders());
+        setFolderMap(loadFolderMap());
+      });
+      loadClassrooms();
+    });
 
   // ─── Folder CRUD ─────────────────────────────────────────────
   const createFolder = () => {
@@ -208,16 +215,39 @@ function HomePage() {
     setFolders(next); saveFolders(next);
   };
 
-  const deleteFolder = (id: string) => {
-    const folder = folders.find((f) => f.id === id);
+  const deleteFolder = async (id: string) => {
+    // Collect all folder IDs to delete (the folder + all nested subfolders)
+    const allFolderIds = new Set<string>();
+    const collect = (fid: string) => {
+      allFolderIds.add(fid);
+      folders.filter((f) => f.parentId === fid).forEach((f) => collect(f.id));
+    };
+    collect(id);
+
+    // Find classrooms that belong to any of those folders
+    const classroomIdsToDelete = Object.entries(folderMap)
+      .filter(([, fid]) => allFolderIds.has(fid))
+      .map(([cid]) => cid);
+
+    // Delete each classroom from IndexedDB
+    await Promise.all(classroomIdsToDelete.map((cid) => deleteStageData(cid).catch(() => {})));
+
+    // Update folderMap — remove deleted classrooms
     const newMap = { ...folderMap };
-    Object.entries(newMap).forEach(([cId, fId]) => {
-      if (fId === id) { if (folder?.parentId) newMap[cId] = folder.parentId; else delete newMap[cId]; }
+    classroomIdsToDelete.forEach((cid) => delete newMap[cid]);
+    saveFolderMap(newMap);
+
+    // Remove the folders themselves
+    const nextFolders = folders.filter((f) => !allFolderIds.has(f.id));
+    saveFolders(nextFolders);
+
+    flushSync(() => {
+      setFolders(nextFolders);
+      setFolderMap(newMap);
+      setClassrooms((prev) => prev.filter((c) => !classroomIdsToDelete.includes(c.id)));
     });
-    const next = folders.filter((f) => f.id !== id && f.parentId !== id);
-    setFolders(next); saveFolders(next);
-    setFolderMap(newMap); saveFolderMap(newMap);
-    setDeletingFolderId(null); setFolderMenuId(null);
+    setDeletingFolderId(null);
+    setFolderMenuId(null);
   };
 
   const moveClassroom = (classroomId: string, folderId: string | null) => {
@@ -430,9 +460,23 @@ function HomePage() {
           {/* ── Breadcrumb row ── */}
           <div className="mb-6 flex items-center justify-between gap-4 flex-wrap">
             <nav className="flex items-center gap-1 text-sm overflow-x-auto">
-              <button onClick={() => setCurrentFolderId(null)}
-                className={cn('flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 whitespace-nowrap transition-colors shrink-0',
-                  !currentFolderId ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 font-semibold' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50')}>
+              <button
+                onClick={() => setCurrentFolderId(null)}
+                onDragOver={(e) => { e.preventDefault(); setDragOverFolderId('__root__'); }}
+                onDragLeave={() => setDragOverFolderId(null)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (draggedClassroomId.current) {
+                    moveClassroom(draggedClassroomId.current, null);
+                    toast.success('Moved to My Classrooms');
+                  }
+                  setDragOverFolderId(null);
+                }}
+                className={cn(
+                  'flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 whitespace-nowrap transition-colors shrink-0',
+                  !currentFolderId ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 font-semibold' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
+                  dragOverFolderId === '__root__' && 'ring-2 ring-orange-400 bg-orange-100 dark:bg-orange-900/30 text-orange-600',
+                )}>
                 <Home className="size-3.5" /> My Classrooms
               </button>
               {breadcrumbPath.map((folder, i) => (
@@ -469,7 +513,7 @@ function HomePage() {
           </div>
 
           {/* ── Content grid ── */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-6">
 
             {/* + New Classroom card */}
             <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
@@ -497,10 +541,6 @@ function HomePage() {
                   onMenuToggle={() => setFolderMenuId(folderMenuId === folder.id ? null : folder.id)}
                   onRenameOpen={() => {
                     setRenameTarget({ type: 'folder', id: folder.id, currentName: folder.name });
-                    setFolderMenuId(null);
-                  }}
-                  onExport={() => {
-                    exportFolderZip(folder.name, classrooms.filter((c) => folderMap[c.id] === folder.id));
                     setFolderMenuId(null);
                   }}
                   onDeleteRequest={() => { setDeletingFolderId(folder.id); setFolderMenuId(null); }}
@@ -566,16 +606,17 @@ function HomePage() {
 // ─── Folder Card ─────────────────────────────────────────────────
 function FolderCard({
   folder, classroomCount, isDragOver, isMenuOpen, isDeletingConfirm,
-  onOpen, onMenuToggle, onRenameOpen, onExport, onDeleteRequest, onDeleteConfirm, onDeleteCancel,
+  onOpen, onMenuToggle, onRenameOpen, onDeleteRequest, onDeleteConfirm, onDeleteCancel,
   onDragOver, onDragLeave, onDrop,
 }: {
   folder: FolderItem; classroomCount: number; isDragOver: boolean; isMenuOpen: boolean; isDeletingConfirm: boolean;
-  onOpen: () => void; onMenuToggle: () => void; onRenameOpen: () => void; onExport: () => void;
+  onOpen: () => void; onMenuToggle: () => void; onRenameOpen: () => void;
   onDeleteRequest: () => void; onDeleteConfirm: () => void; onDeleteCancel: () => void;
   onDragOver: (e: React.DragEvent) => void; onDragLeave: () => void; onDrop: (e: React.DragEvent) => void;
 }) {
   return (
-    <div>
+    // Outer wrapper is the positioning context for the dropdown (not overflow-hidden)
+    <div className="relative">
       <div
         className={cn(
           'group relative w-full aspect-[16/9] rounded-2xl overflow-hidden cursor-pointer transition-all duration-200',
@@ -605,7 +646,7 @@ function FolderCard({
           </div>
         )}
 
-        {/* ⋯ menu button */}
+        {/* ⋯ trigger button only — dropdown is rendered outside overflow-hidden below */}
         {!isDeletingConfirm && (
           <div className="absolute top-2 right-2 z-[91]" onClick={(e) => e.stopPropagation()}>
             <button
@@ -614,23 +655,6 @@ function FolderCard({
             >
               <MoreHorizontal className="size-3.5" />
             </button>
-            {isMenuOpen && (
-              <div
-                className="absolute top-full right-0 mt-1 bg-white dark:bg-gray-800 border border-border rounded-xl shadow-2xl z-[95] overflow-hidden min-w-[160px] py-1"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <button onClick={onRenameOpen} className="w-full px-3 py-2 text-left text-sm flex items-center gap-2.5 hover:bg-muted/60 transition-colors">
-                  <Pencil className="size-3.5 text-muted-foreground" /> Rename
-                </button>
-                <button onClick={onExport} className="w-full px-3 py-2 text-left text-sm flex items-center gap-2.5 hover:bg-muted/60 transition-colors">
-                  <Download className="size-3.5 text-muted-foreground" /> Export folder
-                </button>
-                <div className="my-1 h-px bg-border/50" />
-                <button onClick={onDeleteRequest} className="w-full px-3 py-2 text-left text-sm flex items-center gap-2.5 hover:bg-red-50 dark:hover:bg-red-900/20 text-red-500 transition-colors">
-                  <Trash2 className="size-3.5" /> Delete folder
-                </button>
-              </div>
-            )}
           </div>
         )}
 
@@ -650,6 +674,22 @@ function FolderCard({
           )}
         </AnimatePresence>
       </div>
+
+      {/* Dropdown rendered OUTSIDE overflow-hidden so it isn't clipped */}
+      {isMenuOpen && !isDeletingConfirm && (
+        <div
+          className="absolute top-10 right-2 bg-white dark:bg-gray-800 border border-border rounded-xl shadow-2xl z-[95] min-w-[160px] py-1 max-h-64 overflow-y-auto"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button onClick={onRenameOpen} className="w-full px-3 py-2 text-left text-sm flex items-center gap-2.5 hover:bg-muted/60 transition-colors">
+            <Pencil className="size-3.5 text-muted-foreground" /> Rename
+          </button>
+          <div className="my-1 h-px bg-border/50" />
+          <button onClick={onDeleteRequest} className="w-full px-3 py-2 text-left text-sm flex items-center gap-2.5 hover:bg-red-50 dark:hover:bg-red-900/20 text-red-500 transition-colors">
+            <Trash2 className="size-3.5" /> Delete folder
+          </button>
+        </div>
+      )}
 
       {/* Folder label */}
       <div className="mt-2.5 px-1">
@@ -685,7 +725,8 @@ function ClassroomCard({
   }, []);
 
   return (
-    <div>
+    // Outer wrapper is positioning context — dropdown rendered here, NOT inside overflow-hidden card
+    <div className="relative">
       <div
         ref={thumbRef}
         draggable
@@ -708,11 +749,16 @@ function ClassroomCard({
           </div>
         ) : null}
 
+        {/* Slide count + date badge — bottom-left overlay */}
+        <span className="absolute bottom-2 left-2 z-10 inline-flex items-center rounded-full bg-black/50 backdrop-blur-sm px-2 py-0.5 text-[10px] font-medium text-white/90 whitespace-nowrap pointer-events-none">
+          {classroom.sceneCount} {t('classroom.slides')} · {formatDate(classroom.updatedAt)}
+        </span>
+
         {classroom.interactiveMode && (
           <Tooltip>
             <TooltipTrigger asChild>
               <span onClick={(e) => e.stopPropagation()}
-                className="absolute bottom-2 left-2 inline-flex items-center justify-center size-5 rounded-full bg-white/70 dark:bg-slate-900/60 text-cyan-600 backdrop-blur-sm shadow-sm ring-1 ring-cyan-500/30 z-10">
+                className="absolute bottom-2 right-2 inline-flex items-center justify-center size-5 rounded-full bg-white/70 dark:bg-slate-900/60 text-cyan-600 backdrop-blur-sm shadow-sm ring-1 ring-cyan-500/30 z-10">
                 <Atom className="size-3" />
               </span>
             </TooltipTrigger>
@@ -736,38 +782,13 @@ function ClassroomCard({
                 onClick={(e) => { e.stopPropagation(); onRenameOpen(); }}>
                 <Pencil className="size-3.5" />
               </Button>
-              {/* Move to folder */}
+              {/* Move to folder — trigger only; dropdown rendered outside overflow-hidden below */}
               <div className="absolute top-2 right-20 z-[91]" onClick={(e) => e.stopPropagation()}>
                 <Button size="icon" variant="ghost"
                   className="size-7 opacity-0 group-hover:opacity-100 transition-opacity bg-black/30 hover:bg-black/50 text-white backdrop-blur-sm rounded-full"
                   onClick={(e) => { e.stopPropagation(); onMoveMenuToggle(); }}>
                   <FolderOpen className="size-3.5" />
                 </Button>
-                {isMoveMenuOpen && (
-                  <div
-                    className="absolute top-full right-0 mt-1 bg-white dark:bg-gray-800 border border-border rounded-xl shadow-2xl z-[95] overflow-hidden min-w-[180px] py-1"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <div className="px-3 pt-2 pb-1.5 text-[10px] font-bold text-muted-foreground/50 uppercase tracking-widest">Move to</div>
-                    <button onClick={() => onMoveToFolder(null)}
-                      className={cn('w-full px-3 py-2 text-left text-sm flex items-center gap-2.5 hover:bg-muted/60 transition-colors',
-                        !currentFolderId && 'text-orange-500 font-medium')}>
-                      <Home className="size-3.5 shrink-0" />
-                      <span className="truncate">Root (My Classrooms)</span>
-                    </button>
-                    {folders.length > 0 && <div className="my-1 h-px bg-border/40" />}
-                    <div className="max-h-48 overflow-y-auto">
-                      {folders.map((f) => (
-                        <button key={f.id} onClick={() => onMoveToFolder(f.id)}
-                          className={cn('w-full px-3 py-2 text-left text-sm flex items-center gap-2.5 hover:bg-muted/60 transition-colors',
-                            currentFolderId === f.id && 'text-orange-500 font-medium')}>
-                          <span style={{ color: f.color }} className="shrink-0">📁</span>
-                          <span className="truncate">{f.name}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </div>
             </motion.div>
           )}
@@ -789,14 +810,36 @@ function ClassroomCard({
         </AnimatePresence>
       </div>
 
+      {/* Move-to-folder dropdown — outside overflow-hidden so it isn't clipped */}
+      {isMoveMenuOpen && !confirmingDelete && (
+        <div
+          className="absolute top-10 right-20 bg-white dark:bg-gray-800 border border-border rounded-xl shadow-2xl z-[95] min-w-[180px] py-1 max-h-56 overflow-y-auto"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-3 pt-2 pb-1.5 text-[10px] font-bold text-muted-foreground/50 uppercase tracking-widest">Move to</div>
+          <button onClick={() => onMoveToFolder(null)}
+            className={cn('w-full px-3 py-2 text-left text-sm flex items-center gap-2.5 hover:bg-muted/60 transition-colors',
+              !currentFolderId && 'text-orange-500 font-medium')}>
+            <Home className="size-3.5 shrink-0" />
+            <span className="truncate">Root (My Classrooms)</span>
+          </button>
+          {folders.length > 0 && <div className="my-1 h-px bg-border/40" />}
+          {folders.map((f) => (
+            <button key={f.id} onClick={() => onMoveToFolder(f.id)}
+              className={cn('w-full px-3 py-2 text-left text-sm flex items-center gap-2.5 hover:bg-muted/60 transition-colors',
+                currentFolderId === f.id && 'text-orange-500 font-medium')}>
+              <span style={{ color: f.color }} className="shrink-0">📁</span>
+              <span className="truncate">{f.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Info row */}
-      <div className="mt-2.5 px-1 flex items-start gap-1.5">
-        <span className="shrink-0 inline-flex items-center rounded-full bg-orange-100 dark:bg-orange-900/30 px-2 py-0.5 text-[11px] font-medium text-orange-600 dark:text-orange-400 whitespace-nowrap">
-          {classroom.sceneCount} {t('classroom.slides')} · {formatDate(classroom.updatedAt)}
-        </span>
+      <div className="mt-2.5 px-1">
         <Tooltip>
           <TooltipTrigger asChild>
-            <p className="font-medium text-[14px] truncate text-foreground/90 min-w-0 cursor-pointer leading-tight pt-0.5"
+            <p className="font-medium text-[14px] truncate text-foreground/90 min-w-0 cursor-pointer leading-tight"
               onClick={(e) => { e.stopPropagation(); onRenameOpen(); }}>
               {classroom.name}
             </p>

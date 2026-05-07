@@ -1,28 +1,15 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef, useDeferredValue } from 'react';
+import {
+  useState, useEffect, useMemo, useRef, useDeferredValue, useCallback,
+} from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  ArrowUp,
-  Check,
-  ChevronDown,
-  Clock,
-  Copy,
-  ImagePlus,
-  Pencil,
-  Trash2,
-  Search,
-  Settings,
-  Sun,
-  Moon,
-  Monitor,
-  BotOff,
-  ChevronUp,
-  Upload,
-  Sparkles,
-  Atom,
-  X,
+  Check, ChevronRight, FolderOpen, FolderPlus, Pencil, Trash2,
+  Search, Settings, Sun, Moon, Monitor, ChevronDown, ChevronUp,
+  Upload, Atom, X, Plus, Download, MoreHorizontal, Home, PackageOpen,
+  ImagePlus, Copy,
 } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { createLogger } from '@/lib/logger';
@@ -31,1157 +18,688 @@ import { InputGroup, InputGroupInput, InputGroupButton } from '@/components/ui/i
 import { Textarea as UITextarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { SettingsDialog } from '@/components/settings';
-import { GenerationToolbar } from '@/components/generation/generation-toolbar';
-import { AgentBar } from '@/components/agent/agent-bar';
 import { useTheme } from '@/lib/hooks/use-theme';
 import { nanoid } from 'nanoid';
-import { storePdfBlob } from '@/lib/utils/image-storage';
-import type { UserRequirements } from '@/lib/types/generation';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useUserProfileStore, AVATAR_OPTIONS } from '@/lib/store/user-profile';
 import {
-  StageListItem,
-  listStages,
-  deleteStageData,
-  renameStage,
-  getFirstSlideByStages,
+  StageListItem, listStages, deleteStageData, renameStage, getFirstSlideByStages,
 } from '@/lib/utils/stage-storage';
 import { ThumbnailSlide } from '@/components/slide-renderer/components/ThumbnailSlide';
 import type { Slide } from '@/lib/types/slides';
 import { useMediaGenerationStore } from '@/lib/store/media-generation';
 import { toast } from 'sonner';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { useDraftCache } from '@/lib/hooks/use-draft-cache';
-import { SpeechButton } from '@/components/audio/speech-button';
 import { useImportClassroom } from '@/lib/import/use-import-classroom';
+import { useImportFolder } from '@/lib/import/use-import-folder';
+import { useExportFolder } from '@/lib/export/use-export-folder';
 
 const log = createLogger('Home');
+const FOLDERS_KEY = 'aiguru_folders';
+const FOLDER_MAP_KEY = 'aiguru_classroom_folders';
 
-const WEB_SEARCH_STORAGE_KEY = 'webSearchEnabled';
-const RECENT_OPEN_STORAGE_KEY = 'recentClassroomsOpen';
-const INTERACTIVE_MODE_STORAGE_KEY = 'interactiveModeEnabled';
+// ─── Types ──────────────────────────────────────────────────────
+interface FolderItem {
+  id: string; name: string; color: string; createdAt: number; parentId: string | null;
+}
+const FOLDER_COLORS = ['#f97316','#3b82f6','#8b5cf6','#10b981','#ec4899','#f59e0b','#06b6d4','#6366f1'];
 
-interface FormState {
-  pdfFile: File | null;
-  requirement: string;
-  webSearch: boolean;
-  interactiveMode: boolean;
+function loadFolders(): FolderItem[] {
+  try { return JSON.parse(localStorage.getItem(FOLDERS_KEY) ?? '[]'); } catch { return []; }
+}
+function saveFolders(f: FolderItem[]) {
+  try { localStorage.setItem(FOLDERS_KEY, JSON.stringify(f)); } catch {}
+}
+function loadFolderMap(): Record<string,string> {
+  try { return JSON.parse(localStorage.getItem(FOLDER_MAP_KEY) ?? '{}'); } catch { return {}; }
+}
+function saveFolderMap(m: Record<string,string>) {
+  try { localStorage.setItem(FOLDER_MAP_KEY, JSON.stringify(m)); } catch {}
 }
 
-const initialFormState: FormState = {
-  pdfFile: null,
-  requirement: '',
-  webSearch: false,
-  interactiveMode: false,
-};
+// ─── Rename Modal ───────────────────────────────────────────────
+interface RenameTarget { type: 'folder'|'classroom'; id: string; currentName: string; }
+function RenameModal({ target, onConfirm, onClose }: {
+  target: RenameTarget; onConfirm: (name: string) => void; onClose: () => void;
+}) {
+  const [draft, setDraft] = useState(target.currentName);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { setTimeout(() => { inputRef.current?.focus(); inputRef.current?.select(); }, 50); }, []);
+  const commit = () => { const t = draft.trim(); if (t) onConfirm(t); };
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 8 }}
+        transition={{ duration: 0.18 }}
+        className="relative z-10 bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-border/50 w-full max-w-sm p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-base font-bold text-foreground mb-1">
+          Rename {target.type === 'folder' ? 'Folder' : 'Classroom'}
+        </h3>
+        <p className="text-xs text-muted-foreground/70 mb-4 truncate" title={target.currentName}>
+          Current: <span className="font-medium text-foreground/80">{target.currentName}</span>
+        </p>
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') onClose(); }}
+          className="w-full rounded-xl border border-border bg-muted/30 px-4 py-2.5 text-sm text-foreground outline-none focus:ring-2 focus:ring-orange-400/40 focus:border-orange-400 transition-all"
+          placeholder="New name…"
+        />
+        <div className="flex gap-2 mt-4 justify-end">
+          <button onClick={onClose} className="px-4 py-2 rounded-xl text-sm text-muted-foreground hover:bg-muted/60 transition-colors">
+            Cancel
+          </button>
+          <button onClick={commit} disabled={!draft.trim()}
+            className="px-4 py-2 rounded-xl text-sm font-semibold bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-40 transition-colors">
+            Rename
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
 
+// ─── Main Page ──────────────────────────────────────────────────
 function HomePage() {
   const { t } = useI18n();
   const { theme, setTheme } = useTheme();
   const router = useRouter();
-  const [form, setForm] = useState<FormState>(initialFormState);
+
+  // Settings / theme UI
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<
     import('@/lib/types/settings').SettingsSection | undefined
   >(undefined);
-
-  // Draft cache for requirement text
-  const { cachedValue: cachedRequirement, updateCache: updateRequirementCache } =
-    useDraftCache<string>({ key: 'requirementDraft' });
-
-  // Model setup state
-  const currentModelId = useSettingsStore((s) => s.modelId);
-  const [recentOpen, setRecentOpen] = useState(true);
-  const persistRecentOpen = (next: boolean) => {
-    setRecentOpen(next);
-    try {
-      localStorage.setItem(RECENT_OPEN_STORAGE_KEY, String(next));
-    } catch {
-      /* ignore */
-    }
-  };
-
-  // Hydrate client-only state after mount (avoids SSR mismatch)
-  /* eslint-disable react-hooks/set-state-in-effect -- Hydration from localStorage must happen in effect */
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(RECENT_OPEN_STORAGE_KEY);
-      if (saved !== null) setRecentOpen(saved !== 'false');
-    } catch {
-      /* localStorage unavailable */
-    }
-    try {
-      const savedWebSearch = localStorage.getItem(WEB_SEARCH_STORAGE_KEY);
-      const savedInteractiveMode = localStorage.getItem(INTERACTIVE_MODE_STORAGE_KEY);
-      const updates: Partial<FormState> = {};
-      if (savedWebSearch === 'true') updates.webSearch = true;
-      if (savedInteractiveMode === 'true') updates.interactiveMode = true;
-      if (Object.keys(updates).length > 0) {
-        setForm((prev) => ({ ...prev, ...updates }));
-      }
-    } catch {
-      /* localStorage unavailable */
-    }
-  }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
-
-  // Restore requirement draft from cache (derived state pattern — no effect needed)
-  const [prevCachedRequirement, setPrevCachedRequirement] = useState(cachedRequirement);
-  if (cachedRequirement !== prevCachedRequirement) {
-    setPrevCachedRequirement(cachedRequirement);
-    if (cachedRequirement) {
-      setForm((prev) => ({ ...prev, requirement: cachedRequirement }));
-    }
-  }
-
   const [themeOpen, setThemeOpen] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+
+  // Search
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Folder state
+  const [folders, setFolders] = useState<FolderItem[]>([]);
+  const [folderMap, setFolderMap] = useState<Record<string,string>>({});
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const newFolderInputRef = useRef<HTMLInputElement>(null);
+
+  // Menus — managed via backdrop, not document listeners
+  const [folderMenuId, setFolderMenuId] = useState<string | null>(null);
+  const [moveMenuId, setMoveMenuId] = useState<string | null>(null);
+  const [deletingFolderId, setDeletingFolderId] = useState<string | null>(null);
+
+  // Rename modal
+  const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
+
+  // Classrooms
   const [classrooms, setClassrooms] = useState<StageListItem[]>([]);
   const [thumbnails, setThumbnails] = useState<Record<string, Slide>>({});
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const searchInputRef = useRef<HTMLInputElement>(null);
-  const searchButtonRef = useRef<HTMLButtonElement>(null);
-  const toolbarRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Close dropdowns when clicking outside
+  // Drag and drop
+  const draggedClassroomId = useRef<string | null>(null);
+  const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
+
+  // Init from localStorage
+  useEffect(() => {
+    setFolders(loadFolders());
+    setFolderMap(loadFolderMap());
+  }, []);
+
+  // Close theme dropdown on outside click
   useEffect(() => {
     if (!themeOpen) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (toolbarRef.current && !toolbarRef.current.contains(e.target as Node)) {
-        setThemeOpen(false);
-      }
+    const h = (e: MouseEvent) => {
+      if (!toolbarRef.current?.contains(e.target as Node)) setThemeOpen(false);
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
   }, [themeOpen]);
 
-  const loadClassrooms = async () => {
+  // Load classrooms
+  const loadClassrooms = useCallback(async () => {
     try {
       const list = await listStages();
       setClassrooms(list);
-      // Load first slide thumbnails
       if (list.length > 0) {
         const slides = await getFirstSlideByStages(list.map((c) => c.id));
         setThumbnails(slides);
       }
-    } catch (err) {
-      log.error('Failed to load classrooms:', err);
-    }
-  };
-
-  const { importing, fileInputRef, triggerFileSelect, handleFileChange } = useImportClassroom(
-    () => {
-      loadClassrooms();
-    },
-  );
-
-  useEffect(() => {
-    // Clear stale media store to prevent cross-course thumbnail contamination.
-    // The store may hold tasks from a previously visited classroom whose elementIds
-    // (gen_img_1, etc.) collide with other courses' placeholders.
-    useMediaGenerationStore.getState().revokeObjectUrls();
-    useMediaGenerationStore.setState({ tasks: {} });
-
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- Store hydration on mount
-    loadClassrooms();
+    } catch (err) { log.error('Failed to load classrooms:', err); }
   }, []);
 
-  const handleDelete = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setPendingDeleteId(id);
+  useEffect(() => {
+    useMediaGenerationStore.getState().revokeObjectUrls();
+    useMediaGenerationStore.setState({ tasks: {} });
+    loadClassrooms();
+  }, [loadClassrooms]);
+
+  // Import
+  const { importing, fileInputRef, triggerFileSelect, handleFileChange } =
+    useImportClassroom(loadClassrooms);
+  const { fileInputRef: folderFileRef, triggerFolderSelect, handleFolderFileChange } =
+    useImportFolder(() => loadClassrooms());
+  const { exportFolderZip } = useExportFolder();
+
+  // ─── Folder CRUD ─────────────────────────────────────────────
+  const createFolder = () => {
+    const name = newFolderName.trim();
+    if (!name) return;
+    const f: FolderItem = {
+      id: nanoid(), name, color: FOLDER_COLORS[folders.length % FOLDER_COLORS.length],
+      createdAt: Date.now(), parentId: currentFolderId,
+    };
+    const next = [...folders, f];
+    setFolders(next); saveFolders(next);
+    setNewFolderName(''); setNewFolderOpen(false);
   };
 
+  const renameFolder = (id: string, name: string) => {
+    const next = folders.map((f) => f.id === id ? { ...f, name } : f);
+    setFolders(next); saveFolders(next);
+  };
+
+  const deleteFolder = (id: string) => {
+    const folder = folders.find((f) => f.id === id);
+    const newMap = { ...folderMap };
+    Object.entries(newMap).forEach(([cId, fId]) => {
+      if (fId === id) { if (folder?.parentId) newMap[cId] = folder.parentId; else delete newMap[cId]; }
+    });
+    const next = folders.filter((f) => f.id !== id && f.parentId !== id);
+    setFolders(next); saveFolders(next);
+    setFolderMap(newMap); saveFolderMap(newMap);
+    setDeletingFolderId(null); setFolderMenuId(null);
+  };
+
+  const moveClassroom = (classroomId: string, folderId: string | null) => {
+    const m = { ...folderMap };
+    if (folderId === null) delete m[classroomId]; else m[classroomId] = folderId;
+    setFolderMap(m); saveFolderMap(m);
+    setMoveMenuId(null);
+  };
+
+  // ─── Classroom CRUD ──────────────────────────────────────────
   const confirmDelete = async (id: string) => {
     setPendingDeleteId(null);
     try {
       await deleteStageData(id);
+      const m = { ...folderMap }; delete m[id];
+      setFolderMap(m); saveFolderMap(m);
       await loadClassrooms();
-    } catch (err) {
-      log.error('Failed to delete classroom:', err);
-      toast.error('Failed to delete classroom');
-    }
+    } catch (err) { log.error('Failed to delete:', err); toast.error('Failed to delete classroom'); }
   };
 
-  const handleRename = async (id: string, newName: string) => {
+  const handleRenameClassroom = async (id: string, name: string) => {
     try {
-      await renameStage(id, newName);
-      setClassrooms((prev) => prev.map((c) => (c.id === id ? { ...c, name: newName } : c)));
-    } catch (err) {
-      log.error('Failed to rename classroom:', err);
-      toast.error(t('classroom.renameFailed'));
-    }
+      await renameStage(id, name);
+      setClassrooms((prev) => prev.map((c) => c.id === id ? { ...c, name } : c));
+    } catch { toast.error(t('classroom.renameFailed')); }
   };
 
-  const deferredSearchQuery = useDeferredValue(searchQuery);
+  // ─── Derived data ─────────────────────────────────────────────
+  const dq = useDeferredValue(searchQuery.trim().toLowerCase());
   const filteredClassrooms = useMemo(() => {
-    const q = deferredSearchQuery.trim().toLowerCase();
-    if (!q) return classrooms;
-    return classrooms.filter((c) => {
-      const name = c.name?.toLowerCase() ?? '';
-      const desc = c.description?.toLowerCase() ?? '';
-      return name.includes(q) || desc.includes(q);
-    });
-  }, [classrooms, deferredSearchQuery]);
-
-  const updateForm = <K extends keyof FormState>(field: K, value: FormState[K]) => {
-    setForm((prev) => ({ ...prev, [field]: value }));
-    try {
-      if (field === 'webSearch') localStorage.setItem(WEB_SEARCH_STORAGE_KEY, String(value));
-      if (field === 'interactiveMode')
-        localStorage.setItem(INTERACTIVE_MODE_STORAGE_KEY, String(value));
-      if (field === 'requirement') updateRequirementCache(value as string);
-    } catch {
-      /* ignore */
-    }
-  };
-
-  const showSetupToast = (icon: React.ReactNode, title: string, desc: string) => {
-    toast.custom(
-      (id) => (
-        <div
-          className="w-[356px] rounded-xl border border-amber-200/60 dark:border-amber-800/40 bg-gradient-to-r from-amber-50 via-white to-amber-50 dark:from-amber-950/60 dark:via-slate-900 dark:to-amber-950/60 shadow-lg shadow-amber-500/8 dark:shadow-amber-900/20 p-4 flex items-start gap-3 cursor-pointer"
-          onClick={() => {
-            toast.dismiss(id);
-            setSettingsOpen(true);
-          }}
-        >
-          <div className="shrink-0 mt-0.5 size-9 rounded-lg bg-amber-100 dark:bg-amber-900/40 flex items-center justify-center ring-1 ring-amber-200/50 dark:ring-amber-800/30">
-            {icon}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-amber-900 dark:text-amber-200 leading-tight">
-              {title}
-            </p>
-            <p className="text-xs text-amber-700/80 dark:text-amber-400/70 mt-0.5 leading-relaxed">
-              {desc}
-            </p>
-          </div>
-          <div className="shrink-0 mt-1 text-[10px] font-medium text-amber-500 dark:text-amber-500/70 tracking-wide">
-            <Settings className="size-3.5 animate-[spin_3s_linear_infinite]" />
-          </div>
-        </div>
-      ),
-      { duration: 4000 },
+    const inFolder = classrooms.filter((c) => (folderMap[c.id] ?? null) === currentFolderId);
+    if (!dq) return inFolder;
+    return inFolder.filter((c) =>
+      c.name?.toLowerCase().includes(dq) || c.description?.toLowerCase().includes(dq),
     );
+  }, [classrooms, folderMap, currentFolderId, dq]);
+
+  const visibleFolders = useMemo(() =>
+    folders.filter((f) => f.parentId === currentFolderId), [folders, currentFolderId]);
+
+  const breadcrumbPath = useMemo(() => {
+    const path: FolderItem[] = [];
+    let id = currentFolderId;
+    while (id) {
+      const f = folders.find((x) => x.id === id);
+      if (!f) break;
+      path.unshift(f); id = f.parentId;
+    }
+    return path;
+  }, [currentFolderId, folders]);
+
+  const formatDate = (ts: number) => {
+    const d = Math.floor((Date.now() - ts) / 86400000);
+    if (d === 0) return t('classroom.today');
+    if (d === 1) return t('classroom.yesterday');
+    if (d < 7) return `${d} ${t('classroom.daysAgo')}`;
+    return new Date(ts).toLocaleDateString();
   };
 
-  const handleGenerate = async () => {
-    // Validate setup before proceeding
-    if (!currentModelId) {
-      showSetupToast(
-        <BotOff className="size-4.5 text-amber-600 dark:text-amber-400" />,
-        t('settings.modelNotConfigured'),
-        t('settings.setupNeeded'),
-      );
-      setSettingsOpen(true);
-      return;
+  // ─── Drag & Drop handlers ─────────────────────────────────────
+  const onDragStart = (classroomId: string) => { draggedClassroomId.current = classroomId; };
+  const onDragEnd = () => { draggedClassroomId.current = null; setDragOverFolderId(null); };
+  const onFolderDragOver = (e: React.DragEvent, folderId: string) => {
+    e.preventDefault(); setDragOverFolderId(folderId);
+  };
+  const onFolderDrop = (e: React.DragEvent, folderId: string) => {
+    e.preventDefault();
+    if (draggedClassroomId.current) {
+      moveClassroom(draggedClassroomId.current, folderId);
+      toast.success('Classroom moved to folder');
     }
-
-    if (!form.requirement.trim()) {
-      setError(t('upload.requirementRequired'));
-      return;
-    }
-
-    setError(null);
-
-    try {
-      const userProfile = useUserProfileStore.getState();
-      const requirements: UserRequirements = {
-        requirement: form.requirement,
-        userNickname: userProfile.nickname || undefined,
-        userBio: userProfile.bio || undefined,
-        webSearch: form.webSearch || undefined,
-        interactiveMode: form.interactiveMode,
-      };
-
-      let pdfStorageKey: string | undefined;
-      let pdfFileName: string | undefined;
-      let pdfProviderId: string | undefined;
-      let pdfProviderConfig: { apiKey?: string; baseUrl?: string } | undefined;
-
-      if (form.pdfFile) {
-        pdfStorageKey = await storePdfBlob(form.pdfFile);
-        pdfFileName = form.pdfFile.name;
-
-        const settings = useSettingsStore.getState();
-        pdfProviderId = settings.pdfProviderId;
-        const providerCfg = settings.pdfProvidersConfig?.[settings.pdfProviderId];
-        if (providerCfg) {
-          pdfProviderConfig = {
-            apiKey: providerCfg.apiKey,
-            baseUrl: providerCfg.baseUrl,
-          };
-        }
-      }
-
-      const sessionState = {
-        sessionId: nanoid(),
-        requirements,
-        pdfText: '',
-        pdfImages: [],
-        imageStorageIds: [],
-        pdfStorageKey,
-        pdfFileName,
-        pdfProviderId,
-        pdfProviderConfig,
-        sceneOutlines: null,
-        currentStep: 'generating' as const,
-      };
-      sessionStorage.setItem('generationSession', JSON.stringify(sessionState));
-
-      router.push('/generation-preview');
-    } catch (err) {
-      log.error('Error preparing generation:', err);
-      setError(err instanceof Error ? err.message : t('upload.generateFailed'));
-    }
+    setDragOverFolderId(null);
   };
 
-  const formatDate = (timestamp: number) => {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diffTime = Math.abs(now.getTime() - date.getTime());
-    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+  // Close all menus helper
+  const closeAllMenus = () => { setFolderMenuId(null); setMoveMenuId(null); };
+  const anyMenuOpen = folderMenuId !== null || moveMenuId !== null;
 
-    if (diffDays === 0) return t('classroom.today');
-    if (diffDays === 1) return t('classroom.yesterday');
-    if (diffDays < 7) return `${diffDays} ${t('classroom.daysAgo')}`;
-    return date.toLocaleDateString();
-  };
-
-  const canGenerate = !!form.requirement.trim();
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-      e.preventDefault();
-      if (canGenerate) handleGenerate();
-    }
-  };
-
+  // ─── Render ──────────────────────────────────────────────────
   return (
-    <div className="min-h-[100dvh] w-full bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 flex flex-col items-center p-4 pt-16 md:p-8 md:pt-16 overflow-x-hidden">
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".zip"
-        onChange={handleFileChange}
-        className="hidden"
-      />
-      {/* ═══ Top-left logo + title ═══ */}
-      <div className="fixed top-0 left-0 z-50 flex items-center gap-2.5 px-5 h-14">
-        <img src="/logo.svg" alt="AI-Guru" className="h-8" />
-        <span className="font-extrabold text-base tracking-tight text-gray-900 dark:text-white">
-          AI<span className="text-orange-500">-Guru</span>
-        </span>
-      </div>
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900">
+      {/* Hidden inputs */}
+      <input ref={fileInputRef} type="file" accept=".aicls,.zip" onChange={handleFileChange} className="hidden" />
+      <input ref={folderFileRef} type="file" accept=".zip" onChange={handleFolderFileChange} className="hidden" />
 
-      {/* ═══ Top-right pill (unchanged) ═══ */}
-      <div
-        ref={toolbarRef}
-        className="fixed top-4 right-4 z-50 flex items-center gap-1 bg-white/60 dark:bg-gray-800/60 backdrop-blur-md px-2 py-1.5 rounded-full border border-gray-100/50 dark:border-gray-700/50 shadow-sm"
-      >
-        
-        
+      {/* Global menu backdrop — sits above content, below menus */}
+      {anyMenuOpen && (
+        <div className="fixed inset-0 z-[90]" onClick={closeAllMenus} />
+      )}
 
-        
-
-        {/* Theme Selector */}
-        <div className="relative">
-          <button
-            onClick={() => {
-              setThemeOpen(!themeOpen);
+      {/* Rename Modal */}
+      <AnimatePresence>
+        {renameTarget && (
+          <RenameModal
+            target={renameTarget}
+            onClose={() => setRenameTarget(null)}
+            onConfirm={(name) => {
+              if (renameTarget.type === 'folder') renameFolder(renameTarget.id, name);
+              else handleRenameClassroom(renameTarget.id, name);
+              setRenameTarget(null);
             }}
-            className="p-2 rounded-full text-gray-400 dark:text-gray-500 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:shadow-sm transition-all"
-          >
-            {theme === 'light' && <Sun className="w-4 h-4" />}
-            {theme === 'dark' && <Moon className="w-4 h-4" />}
-            {theme === 'system' && <Monitor className="w-4 h-4" />}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* ═══ Header ═══ */}
+      <header className="fixed top-0 left-0 right-0 z-50 h-14 bg-white/85 dark:bg-slate-950/85 backdrop-blur-md border-b border-border/40 flex items-center px-5 gap-4">
+        <div className="flex items-center gap-2.5 shrink-0">
+          <img src="/logo.svg" alt="AI-Guru" className="h-8" />
+          <span className="font-extrabold text-base tracking-tight text-gray-900 dark:text-white">
+            AI<span className="text-orange-500">-Guru</span>
+          </span>
+        </div>
+
+        {/* Search */}
+        <div className="flex-1 max-w-md mx-auto">
+          <AnimatePresence initial={false}>
+            {searchOpen ? (
+              <motion.div key="open" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                <InputGroup className="h-8 rounded-full bg-muted/50 border-transparent">
+                  <Search className="size-3.5 ml-3 text-muted-foreground/50 shrink-0" />
+                  <InputGroupInput
+                    ref={searchInputRef}
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Escape') { setSearchQuery(''); setSearchOpen(false); } }}
+                    onBlur={() => { if (!searchQuery) setSearchOpen(false); }}
+                    placeholder="Search classrooms…"
+                    className="h-8 pl-2 text-[13px]"
+                  />
+                  {searchQuery && (
+                    <InputGroupButton size="icon-xs" onMouseDown={(e) => e.preventDefault()} onClick={() => setSearchQuery('')}>
+                      <X />
+                    </InputGroupButton>
+                  )}
+                </InputGroup>
+              </motion.div>
+            ) : (
+              <motion.button key="closed" onClick={() => { setSearchOpen(true); requestAnimationFrame(() => searchInputRef.current?.focus()); }}
+                className="flex items-center gap-2 h-8 px-3 rounded-full text-[13px] text-muted-foreground/60 hover:bg-muted/50 transition-all w-full">
+                <Search className="size-3.5" />
+                <span>Search classrooms…</span>
+                <kbd className="ml-auto text-[10px] bg-muted rounded px-1.5 py-0.5 hidden sm:block">⌘K</kbd>
+              </motion.button>
+            )}
+          </AnimatePresence>
+        </div>
+
+        {/* Right toolbar */}
+        <div ref={toolbarRef} className="flex items-center gap-0.5 ml-auto shrink-0">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button onClick={triggerFileSelect} disabled={importing} className="p-2 rounded-full text-muted-foreground/60 hover:bg-muted/60 hover:text-foreground/80 transition-all">
+                <Upload className="size-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Import classroom (.zip)</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button onClick={triggerFolderSelect} className="p-2 rounded-full text-muted-foreground/60 hover:bg-muted/60 hover:text-foreground/80 transition-all">
+                <PackageOpen className="size-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Import folder (.zip)</TooltipContent>
+          </Tooltip>
+
+          {/* Theme selector */}
+          <div className="relative">
+            <button onClick={() => setThemeOpen((o) => !o)} className="p-2 rounded-full text-muted-foreground/60 hover:bg-muted/60 hover:text-foreground/80 transition-all">
+              {theme === 'light' && <Sun className="size-4" />}
+              {theme === 'dark' && <Moon className="size-4" />}
+              {theme === 'system' && <Monitor className="size-4" />}
+            </button>
+            {themeOpen && (
+              <div className="absolute top-full mt-2 right-0 bg-white dark:bg-gray-800 border border-border rounded-xl shadow-xl overflow-hidden z-[100] min-w-[150px]">
+                {(['light','dark','system'] as const).map((opt) => (
+                  <button key={opt} onClick={() => { setTheme(opt); setThemeOpen(false); }}
+                    className={cn('w-full px-4 py-2.5 text-left text-sm flex items-center gap-2.5 hover:bg-muted/60 transition-colors',
+                      theme === opt && 'text-orange-500 font-medium bg-orange-50 dark:bg-orange-900/20')}>
+                    {opt === 'light' && <Sun className="size-4" />}
+                    {opt === 'dark' && <Moon className="size-4" />}
+                    {opt === 'system' && <Monitor className="size-4" />}
+                    <span className="capitalize">{opt}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <button onClick={() => setSettingsOpen(true)} className="p-2 rounded-full text-muted-foreground/60 hover:bg-muted/60 hover:text-foreground/80 transition-all group">
+            <Settings className="size-4 group-hover:rotate-90 transition-transform duration-500" />
           </button>
-          {themeOpen && (
-            <div className="absolute top-full mt-2 right-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg overflow-hidden z-50 min-w-[140px]">
-              <button
-                onClick={() => {
-                  setTheme('light');
-                  setThemeOpen(false);
-                }}
-                className={cn(
-                  'w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-2',
-                  theme === 'light' &&
-                    'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400',
-                )}
-              >
-                <Sun className="w-4 h-4" />
-                {t('settings.themeOptions.light')}
+        </div>
+      </header>
+
+      <SettingsDialog open={settingsOpen} onOpenChange={(o) => { setSettingsOpen(o); if (!o) setSettingsSection(undefined); }} initialSection={settingsSection} />
+
+      {/* ═══ Main scrollable area ═══ */}
+      <main className="pt-14 min-h-screen">
+        <div className="max-w-7xl mx-auto px-5 md:px-8 py-6">
+
+          {/* Background decor */}
+          <div className="fixed inset-0 pointer-events-none -z-10 overflow-hidden">
+            <div className="absolute top-20 left-1/4 w-96 h-96 bg-blue-500/5 rounded-full blur-3xl" />
+            <div className="absolute bottom-20 right-1/4 w-96 h-96 bg-orange-500/6 rounded-full blur-3xl" />
+          </div>
+
+          {/* ── Breadcrumb row ── */}
+          <div className="mb-6 flex items-center justify-between gap-4 flex-wrap">
+            <nav className="flex items-center gap-1 text-sm overflow-x-auto">
+              <button onClick={() => setCurrentFolderId(null)}
+                className={cn('flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 whitespace-nowrap transition-colors shrink-0',
+                  !currentFolderId ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 font-semibold' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50')}>
+                <Home className="size-3.5" /> My Classrooms
               </button>
-              <button
-                onClick={() => {
-                  setTheme('dark');
-                  setThemeOpen(false);
-                }}
-                className={cn(
-                  'w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-2',
-                  theme === 'dark' &&
-                    'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400',
-                )}
-              >
-                <Moon className="w-4 h-4" />
-                {t('settings.themeOptions.dark')}
+              {breadcrumbPath.map((folder, i) => (
+                <span key={folder.id} className="flex items-center gap-1 shrink-0">
+                  <ChevronRight className="size-3 text-muted-foreground/40" />
+                  <button onClick={() => setCurrentFolderId(folder.id)}
+                    className={cn('flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 transition-colors',
+                      i === breadcrumbPath.length - 1
+                        ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 font-semibold'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/50')}>
+                    <span style={{ color: folder.color }}>📁</span> {folder.name}
+                  </button>
+                </span>
+              ))}
+            </nav>
+
+            {/* New folder control */}
+            {newFolderOpen ? (
+              <div className="flex items-center gap-2 bg-white dark:bg-gray-800 border border-border rounded-xl px-3 py-1.5 shadow-sm shrink-0">
+                <input ref={newFolderInputRef} autoFocus value={newFolderName}
+                  onChange={(e) => setNewFolderName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') createFolder(); if (e.key === 'Escape') setNewFolderOpen(false); }}
+                  placeholder="Folder name…"
+                  className="text-sm bg-transparent outline-none w-36 placeholder:text-muted-foreground/40" />
+                <button onClick={createFolder} className="text-orange-500 hover:text-orange-600 transition-colors"><Check className="size-4" /></button>
+                <button onClick={() => setNewFolderOpen(false)} className="text-muted-foreground/50 hover:text-foreground transition-colors"><X className="size-4" /></button>
+              </div>
+            ) : (
+              <button onClick={() => { setNewFolderOpen(true); setTimeout(() => newFolderInputRef.current?.focus(), 50); }}
+                className="flex items-center gap-1.5 text-sm text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/50 rounded-xl px-3 py-1.5 border border-dashed border-border/60 hover:border-border transition-all shrink-0">
+                <FolderPlus className="size-4" /> New Folder
               </button>
-              <button
-                onClick={() => {
-                  setTheme('system');
-                  setThemeOpen(false);
-                }}
-                className={cn(
-                  'w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-2',
-                  theme === 'system' &&
-                    'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400',
-                )}
-              >
-                <Monitor className="w-4 h-4" />
-                {t('settings.themeOptions.system')}
+            )}
+          </div>
+
+          {/* ── Content grid ── */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-4">
+
+            {/* + New Classroom card */}
+            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+              <button onClick={() => router.push('/new-classroom')}
+                className="group w-full aspect-[16/9] rounded-2xl border-2 border-dashed border-orange-300/60 dark:border-orange-700/40 bg-orange-50/50 dark:bg-orange-900/10 hover:bg-orange-50 dark:hover:bg-orange-900/20 hover:border-orange-400 transition-all flex flex-col items-center justify-center gap-2">
+                <div className="w-10 h-10 rounded-2xl bg-orange-100 dark:bg-orange-900/40 flex items-center justify-center group-hover:scale-110 transition-transform">
+                  <Plus className="size-5 text-orange-500" />
+                </div>
+                <span className="text-xs font-semibold text-orange-500/80 group-hover:text-orange-600 transition-colors">New Classroom</span>
               </button>
+              <div className="mt-2.5 px-1 h-5" />
+            </motion.div>
+
+            {/* Folder cards */}
+            {visibleFolders.map((folder, i) => (
+              <motion.div key={folder.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: (i + 1) * 0.04 }}>
+                <FolderCard
+                  folder={folder}
+                  classroomCount={classrooms.filter((c) => folderMap[c.id] === folder.id).length}
+                  isDragOver={dragOverFolderId === folder.id}
+                  isMenuOpen={folderMenuId === folder.id}
+                  isDeletingConfirm={deletingFolderId === folder.id}
+                  onOpen={() => setCurrentFolderId(folder.id)}
+                  onMenuToggle={() => setFolderMenuId(folderMenuId === folder.id ? null : folder.id)}
+                  onRenameOpen={() => {
+                    setRenameTarget({ type: 'folder', id: folder.id, currentName: folder.name });
+                    setFolderMenuId(null);
+                  }}
+                  onExport={() => {
+                    exportFolderZip(folder.name, classrooms.filter((c) => folderMap[c.id] === folder.id));
+                    setFolderMenuId(null);
+                  }}
+                  onDeleteRequest={() => { setDeletingFolderId(folder.id); setFolderMenuId(null); }}
+                  onDeleteConfirm={() => deleteFolder(folder.id)}
+                  onDeleteCancel={() => setDeletingFolderId(null)}
+                  onDragOver={(e) => onFolderDragOver(e, folder.id)}
+                  onDragLeave={() => setDragOverFolderId(null)}
+                  onDrop={(e) => onFolderDrop(e, folder.id)}
+                />
+              </motion.div>
+            ))}
+
+            {/* Classroom cards */}
+            {filteredClassrooms.map((classroom, i) => (
+              <motion.div key={classroom.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: (i + visibleFolders.length + 1) * 0.04 }}>
+                <ClassroomCard
+                  classroom={classroom}
+                  slide={thumbnails[classroom.id]}
+                  formatDate={formatDate}
+                  confirmingDelete={pendingDeleteId === classroom.id}
+                  onDelete={(e) => { e.stopPropagation(); setPendingDeleteId(classroom.id); }}
+                  onConfirmDelete={() => confirmDelete(classroom.id)}
+                  onCancelDelete={() => setPendingDeleteId(null)}
+                  onClick={() => router.push(`/classroom/${classroom.id}`)}
+                  onRenameOpen={() => setRenameTarget({ type: 'classroom', id: classroom.id, currentName: classroom.name })}
+                  folders={folders}
+                  currentFolderId={folderMap[classroom.id] ?? null}
+                  isMoveMenuOpen={moveMenuId === classroom.id}
+                  onMoveMenuToggle={() => setMoveMenuId(moveMenuId === classroom.id ? null : classroom.id)}
+                  onMoveToFolder={(fid) => moveClassroom(classroom.id, fid)}
+                  onDragStart={() => onDragStart(classroom.id)}
+                  onDragEnd={onDragEnd}
+                />
+              </motion.div>
+            ))}
+          </div>
+
+          {/* Empty states */}
+          {classrooms.length === 0 && visibleFolders.length === 0 && !searchQuery && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }}
+              className="mt-16 text-center text-muted-foreground/50">
+              <div className="text-4xl mb-3">📚</div>
+              <p className="text-sm font-medium">No classrooms yet</p>
+              <p className="text-xs mt-1">Click <span className="text-orange-500 font-semibold">New Classroom</span> to create your first one</p>
+            </motion.div>
+          )}
+          {searchQuery && filteredClassrooms.length === 0 && (
+            <div className="mt-12 text-center text-muted-foreground/50 text-sm">
+              No classrooms match &ldquo;{searchQuery}&rdquo;
             </div>
           )}
-        </div>
 
-        
-
-        {/* Settings Button */}
-        <div className="relative">
-          <button
-            onClick={() => setSettingsOpen(true)}
-            className="p-2 rounded-full text-gray-400 dark:text-gray-500 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:shadow-sm transition-all group"
-          >
-            <Settings className="w-4 h-4 group-hover:rotate-90 transition-transform duration-500" />
-          </button>
-        </div>
-      </div>
-      <SettingsDialog
-        open={settingsOpen}
-        onOpenChange={(open) => {
-          setSettingsOpen(open);
-          if (!open) setSettingsSection(undefined);
-        }}
-        initialSection={settingsSection}
-      />
-
-      {/* ═══ Background Decor ═══ */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div
-          className="absolute top-0 left-1/4 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl animate-pulse"
-          style={{ animationDuration: '4s' }}
-        />
-        <div
-          className="absolute bottom-0 right-1/4 w-96 h-96 bg-orange-500/10 rounded-full blur-3xl animate-pulse"
-          style={{ animationDuration: '6s' }}
-        />
-      </div>
-
-      {/* ═══ Hero section: title + input (centered, wider) ═══ */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6, ease: 'easeOut' }}
-        className={cn(
-          'relative z-20 w-full max-w-[800px] flex flex-col items-center',
-          classrooms.length === 0 ? 'justify-center min-h-[calc(100dvh-8rem)]' : 'mt-[10vh]',
-        )}
-      >
-        {/* ── Logo ── */}
-        <motion.img
-          src="/logo.svg"
-          alt="AI-Guru"
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{
-            delay: 0.1,
-            type: 'spring',
-            stiffness: 200,
-            damping: 20,
-          }}
-          className="h-12 md:h-16 mb-2 -ml-2 md:-ml-3"
-        />
-
-        {/* ── Slogan ── */}
-        <motion.p
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.25 }}
-          className="text-sm text-muted-foreground/60 mb-8"
-        >
-          {t('home.slogan')}
-        </motion.p>
-
-        {/* ── Unified input area ── */}
-        <motion.div
-          initial={{ opacity: 0, scale: 0.97 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: 0.35 }}
-          className="w-full"
-        >
-          <div className="w-full rounded-2xl border border-border/60 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl shadow-xl shadow-black/[0.03] dark:shadow-black/20 transition-shadow focus-within:shadow-2xl focus-within:shadow-orange-500/[0.06]">
-            {/* ── Greeting + Profile + Agents ── */}
-            <div className="relative z-20 flex items-start justify-between">
-              <GreetingBar />
-              <div className="pr-3 pt-3.5 shrink-0">
-                <AgentBar />
-              </div>
-            </div>
-
-            {/* Textarea */}
-            <textarea
-              ref={textareaRef}
-              placeholder={t('upload.requirementPlaceholder')}
-              className="w-full resize-none border-0 bg-transparent px-4 pt-1 pb-2 text-[13px] leading-relaxed placeholder:text-muted-foreground/40 focus:outline-none min-h-[140px] max-h-[300px]"
-              value={form.requirement}
-              onChange={(e) => updateForm('requirement', e.target.value)}
-              onKeyDown={handleKeyDown}
-              rows={4}
-            />
-
-            {/* Toolbar row */}
-            <div className="px-3 pb-3 flex items-end gap-2">
-              <div className="flex-1 min-w-0">
-                <GenerationToolbar
-                  webSearch={form.webSearch}
-                  onWebSearchChange={(v) => updateForm('webSearch', v)}
-                  onSettingsOpen={(section) => {
-                    setSettingsSection(section);
-                    setSettingsOpen(true);
-                  }}
-                  pdfFile={form.pdfFile}
-                  onPdfFileChange={(f) => updateForm('pdfFile', f)}
-                  onPdfError={setError}
-                />
-              </div>
-
-              {/* Interactive mode toggle */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <motion.button
-                    whileTap={{ scale: 0.95 }}
-                    transition={{ type: 'spring', stiffness: 400, damping: 17 }}
-                    onClick={() => updateForm('interactiveMode', !form.interactiveMode)}
-                    className={cn(
-                      'relative inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all cursor-pointer select-none whitespace-nowrap border shrink-0 h-8',
-                      form.interactiveMode
-                        ? 'bg-cyan-100 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300 border-cyan-500 shadow-[0_0_12px_rgba(6,182,212,0.35)] dark:shadow-[0_0_12px_rgba(6,182,212,0.25)]'
-                        : 'border-cyan-300/60 text-cyan-600 dark:text-cyan-400 hover:bg-cyan-50 dark:hover:bg-cyan-900/20',
-                    )}
-                  >
-                    {form.interactiveMode && (
-                      <span
-                        className="absolute inset-[-4px] rounded-full border border-cyan-400/40 dark:border-cyan-400/25"
-                        style={{
-                          animation: 'interactive-mode-breathe 2s ease-in-out infinite',
-                        }}
-                      />
-                    )}
-                    <Atom className="size-3.5 relative z-10 animate-[spin_3s_linear_infinite]" />
-                    <span className="relative z-10">{t('toolbar.interactiveModeLabel')}</span>
-                  </motion.button>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="text-xs">
-                  {t('toolbar.interactiveModeHint')}
-                </TooltipContent>
-              </Tooltip>
-
-              {/* Voice input */}
-              <SpeechButton
-                size="md"
-                onTranscription={(text) => {
-                  setForm((prev) => {
-                    const next = prev.requirement + (prev.requirement ? ' ' : '') + text;
-                    updateRequirementCache(next);
-                    return { ...prev, requirement: next };
-                  });
-                }}
-              />
-
-              {/* Send button */}
-              <button
-                onClick={handleGenerate}
-                disabled={!canGenerate}
-                className={cn(
-                  'shrink-0 h-8 rounded-lg flex items-center justify-center gap-1.5 transition-all px-3',
-                  canGenerate
-                    ? 'bg-primary text-primary-foreground hover:opacity-90 shadow-sm cursor-pointer'
-                    : 'bg-muted text-muted-foreground/40 cursor-not-allowed',
-                )}
-              >
-                <span className="text-xs font-medium">{t('toolbar.enterClassroom')}</span>
-                <ArrowUp className="size-3.5" />
-              </button>
-            </div>
+          <div className="mt-16 pb-4 text-center text-xs text-muted-foreground/25">
+            AI-Guru · Your personal AI tutor
           </div>
-        </motion.div>
+        </div>
+      </main>
+    </div>
+  );
+}
 
-        {/* ── Error ── */}
-        <AnimatePresence>
-          {error && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              className="mt-3 w-full p-3 bg-destructive/10 border border-destructive/20 rounded-lg"
+// ─── Folder Card ─────────────────────────────────────────────────
+function FolderCard({
+  folder, classroomCount, isDragOver, isMenuOpen, isDeletingConfirm,
+  onOpen, onMenuToggle, onRenameOpen, onExport, onDeleteRequest, onDeleteConfirm, onDeleteCancel,
+  onDragOver, onDragLeave, onDrop,
+}: {
+  folder: FolderItem; classroomCount: number; isDragOver: boolean; isMenuOpen: boolean; isDeletingConfirm: boolean;
+  onOpen: () => void; onMenuToggle: () => void; onRenameOpen: () => void; onExport: () => void;
+  onDeleteRequest: () => void; onDeleteConfirm: () => void; onDeleteCancel: () => void;
+  onDragOver: (e: React.DragEvent) => void; onDragLeave: () => void; onDrop: (e: React.DragEvent) => void;
+}) {
+  return (
+    <div>
+      <div
+        className={cn(
+          'group relative w-full aspect-[16/9] rounded-2xl overflow-hidden cursor-pointer transition-all duration-200',
+          'hover:scale-[1.02] hover:shadow-lg',
+          isDragOver && 'ring-2 ring-orange-400 scale-[1.02] shadow-lg shadow-orange-500/20',
+        )}
+        style={{ background: `linear-gradient(135deg, ${folder.color}18, ${folder.color}38)`, border: `1.5px solid ${folder.color}30` }}
+        onClick={isDeletingConfirm ? undefined : onOpen}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+      >
+        {/* Folder content */}
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 select-none">
+          <FolderOpen className="size-12 opacity-60 transition-transform group-hover:scale-110" style={{ color: folder.color }} />
+          <span className="text-xs font-semibold opacity-60" style={{ color: folder.color }}>
+            {classroomCount} {classroomCount === 1 ? 'classroom' : 'classrooms'}
+          </span>
+        </div>
+
+        {/* Drag-over indicator */}
+        {isDragOver && (
+          <div className="absolute inset-0 bg-orange-400/10 flex items-center justify-center">
+            <span className="text-xs font-bold text-orange-500 bg-white/80 dark:bg-gray-900/80 px-3 py-1 rounded-full">
+              Drop to move here
+            </span>
+          </div>
+        )}
+
+        {/* ⋯ menu button */}
+        {!isDeletingConfirm && (
+          <div className="absolute top-2 right-2 z-[91]" onClick={(e) => e.stopPropagation()}>
+            <button
+              onClick={(e) => { e.stopPropagation(); onMenuToggle(); }}
+              className="size-7 rounded-full bg-black/20 hover:bg-black/40 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm"
             >
-              <p className="text-sm text-destructive">{error}</p>
+              <MoreHorizontal className="size-3.5" />
+            </button>
+            {isMenuOpen && (
+              <div
+                className="absolute top-full right-0 mt-1 bg-white dark:bg-gray-800 border border-border rounded-xl shadow-2xl z-[95] overflow-hidden min-w-[160px] py-1"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button onClick={onRenameOpen} className="w-full px-3 py-2 text-left text-sm flex items-center gap-2.5 hover:bg-muted/60 transition-colors">
+                  <Pencil className="size-3.5 text-muted-foreground" /> Rename
+                </button>
+                <button onClick={onExport} className="w-full px-3 py-2 text-left text-sm flex items-center gap-2.5 hover:bg-muted/60 transition-colors">
+                  <Download className="size-3.5 text-muted-foreground" /> Export folder
+                </button>
+                <div className="my-1 h-px bg-border/50" />
+                <button onClick={onDeleteRequest} className="w-full px-3 py-2 text-left text-sm flex items-center gap-2.5 hover:bg-red-50 dark:hover:bg-red-900/20 text-red-500 transition-colors">
+                  <Trash2 className="size-3.5" /> Delete folder
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Delete confirm overlay */}
+        <AnimatePresence>
+          {isDeletingConfirm && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/55 backdrop-blur-[4px]"
+              onClick={(e) => e.stopPropagation()}>
+              <span className="text-[13px] font-semibold text-white">Delete folder?</span>
+              <p className="text-[11px] text-white/60 px-4 text-center leading-relaxed">Classrooms inside will move to root</p>
+              <div className="flex gap-2 mt-1">
+                <button onClick={onDeleteCancel} className="px-3.5 py-1 rounded-lg text-xs font-medium bg-white/15 text-white hover:bg-white/25 transition-colors">Cancel</button>
+                <button onClick={onDeleteConfirm} className="px-3.5 py-1 rounded-lg text-xs font-medium bg-red-500 text-white hover:bg-red-600 transition-colors">Delete</button>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
+      </div>
 
-        {/* ── Import button (empty state) ── */}
-        {classrooms.length === 0 && (
-          <button
-            onClick={triggerFileSelect}
-            disabled={importing}
-            className="relative z-10 mt-4 flex items-center gap-1.5 text-[12px] text-muted-foreground/40 hover:text-foreground/60 transition-colors"
-          >
-            <Upload className="size-3.5" />
-            <span>{t('import.classroom')}</span>
-          </button>
-        )}
-      </motion.div>
-
-      {/* ═══ Recent classrooms — collapsible ═══ */}
-      {classrooms.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.5 }}
-          className="relative z-10 mt-10 w-full max-w-6xl flex flex-col items-center"
-        >
-          {/* Trigger — divider-line with centered text */}
-          <div className="group w-full flex items-center gap-4 py-2">
-            <div className="flex-1 h-px bg-border/40 group-hover:bg-border/70 transition-colors" />
-            <div className="shrink-0 flex items-center gap-3 text-[13px] text-muted-foreground/60 select-none">
-              <button
-                onClick={() => persistRecentOpen(!recentOpen)}
-                className="flex items-center gap-2 hover:text-foreground/70 transition-colors cursor-pointer"
-              >
-                <Clock className="size-3.5" />
-                {t('classroom.recentClassrooms')}
-                <span className="text-[11px] tabular-nums opacity-60">{classrooms.length}</span>
-                <motion.div
-                  animate={{ rotate: recentOpen ? 180 : 0 }}
-                  transition={{ duration: 0.3, ease: 'easeInOut' }}
-                >
-                  <ChevronDown className="size-3.5" />
-                </motion.div>
-              </button>
-
-              {/* Search toggle — icon that expands into an input in place */}
-              <AnimatePresence initial={false}>
-                {!searchOpen ? (
-                  <motion.button
-                    key="search-icon"
-                    ref={searchButtonRef}
-                    type="button"
-                    aria-label={t('classroom.searchAriaLabel')}
-                    onClick={() => {
-                      setSearchOpen(true);
-                      if (!recentOpen) persistRecentOpen(true);
-                      requestAnimationFrame(() => searchInputRef.current?.focus());
-                    }}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.12, ease: 'easeOut' }}
-                    className="flex items-center justify-center size-6 rounded-full text-muted-foreground/50 hover:text-foreground/70 hover:bg-muted/50 transition-colors cursor-pointer"
-                  >
-                    <Search className="size-3.5" />
-                  </motion.button>
-                ) : (
-                  <motion.div
-                    key="search-input"
-                    initial={{ opacity: 0, width: 0 }}
-                    animate={{ opacity: 1, width: 200 }}
-                    exit={{ opacity: 0, width: 0 }}
-                    transition={{ duration: 0.18, ease: [0.25, 0.1, 0.25, 1] }}
-                    className="overflow-hidden"
-                  >
-                    <InputGroup
-                      className={cn(
-                        'h-7 text-[12px] rounded-full bg-muted/40 border-transparent shadow-none',
-                        'transition-colors',
-                        'hover:bg-muted/60',
-                        'has-[[data-slot=input-group-control]:focus-visible]:bg-muted/60',
-                        'has-[[data-slot=input-group-control]:focus-visible]:border-transparent',
-                        'has-[[data-slot=input-group-control]:focus-visible]:ring-0',
-                      )}
-                    >
-                      <InputGroupInput
-                        ref={searchInputRef}
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Escape') {
-                            e.preventDefault();
-                            if (searchQuery) {
-                              setSearchQuery('');
-                            } else {
-                              setSearchOpen(false);
-                              requestAnimationFrame(() => searchButtonRef.current?.focus());
-                            }
-                          }
-                        }}
-                        onBlur={() => {
-                          if (!searchQuery) {
-                            setSearchOpen(false);
-                          }
-                        }}
-                        placeholder={t('classroom.searchPlaceholder')}
-                        aria-label={t('classroom.searchAriaLabel')}
-                        className="h-7 pl-3 placeholder:text-muted-foreground/50"
-                      />
-                      {searchQuery && (
-                        <InputGroupButton
-                          size="icon-xs"
-                          aria-label={t('classroom.clearSearch')}
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => {
-                            setSearchQuery('');
-                            searchInputRef.current?.focus();
-                          }}
-                        >
-                          <X />
-                        </InputGroupButton>
-                      )}
-                    </InputGroup>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              <button
-                onClick={triggerFileSelect}
-                disabled={importing}
-                className="group/import grid grid-cols-[auto_0fr] hover:grid-cols-[auto_1fr] items-center gap-1 rounded-full px-1.5 py-0.5 text-[12px] text-muted-foreground/35 hover:text-muted-foreground/70 hover:bg-muted/50 transition-all duration-200 cursor-pointer"
-              >
-                <Upload className="size-3" />
-                <span className="overflow-hidden opacity-0 group-hover/import:opacity-100 transition-opacity duration-200 whitespace-nowrap">
-                  {t('import.classroom')}
-                </span>
-              </button>
-            </div>
-            <div className="flex-1 h-px bg-border/40 group-hover:bg-border/70 transition-colors" />
-          </div>
-
-          {/* Expandable content */}
-          <AnimatePresence>
-            {recentOpen && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.4, ease: [0.25, 0.1, 0.25, 1] }}
-                className="w-full overflow-hidden"
-              >
-                {searchQuery.trim() && filteredClassrooms.length === 0 ? (
-                  <div className="pt-8 pb-2 text-center text-[13px] text-muted-foreground/60">
-                    {t('classroom.searchEmpty')}
-                  </div>
-                ) : (
-                  <div className="pt-8 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-5 gap-y-8">
-                    {filteredClassrooms.map((classroom, i) => (
-                      <motion.div
-                        key={classroom.id}
-                        initial={{ opacity: 0, y: 16 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{
-                          delay: i * 0.04,
-                          duration: 0.35,
-                          ease: 'easeOut',
-                        }}
-                      >
-                        <ClassroomCard
-                          classroom={classroom}
-                          slide={thumbnails[classroom.id]}
-                          formatDate={formatDate}
-                          onDelete={handleDelete}
-                          onRename={handleRename}
-                          confirmingDelete={pendingDeleteId === classroom.id}
-                          onConfirmDelete={() => confirmDelete(classroom.id)}
-                          onCancelDelete={() => setPendingDeleteId(null)}
-                          onClick={() => router.push(`/classroom/${classroom.id}`)}
-                        />
-                      </motion.div>
-                    ))}
-                  </div>
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </motion.div>
-      )}
-
-      {/* Footer — flows with content, at the very end */}
-      <div className="mt-auto pt-12 pb-4 text-center text-xs text-muted-foreground/40">
-        AI-Guru Open Source Project
+      {/* Folder label */}
+      <div className="mt-2.5 px-1">
+        <p className="font-semibold text-[14px] truncate text-foreground/90" title={folder.name}>{folder.name}</p>
       </div>
     </div>
   );
 }
 
-// ─── Greeting Bar — avatar + "Hi, Name", click to edit in-place ────
-const MAX_AVATAR_SIZE = 5 * 1024 * 1024;
-
-function isCustomAvatar(src: string) {
-  return src.startsWith('data:');
-}
-
-function GreetingBar() {
-  const { t } = useI18n();
-  const avatar = useUserProfileStore((s) => s.avatar);
-  const nickname = useUserProfileStore((s) => s.nickname);
-  const bio = useUserProfileStore((s) => s.bio);
-  const setAvatar = useUserProfileStore((s) => s.setAvatar);
-  const setNickname = useUserProfileStore((s) => s.setNickname);
-  const setBio = useUserProfileStore((s) => s.setBio);
-
-  const [open, setOpen] = useState(false);
-  const [editingName, setEditingName] = useState(false);
-  const [nameDraft, setNameDraft] = useState('');
-  const [avatarPickerOpen, setAvatarPickerOpen] = useState(false);
-  const nameInputRef = useRef<HTMLInputElement>(null);
-  const avatarInputRef = useRef<HTMLInputElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  const displayName = nickname || t('profile.defaultNickname');
-
-  // Click-outside to collapse
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-        setEditingName(false);
-        setAvatarPickerOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
-
-  const startEditName = () => {
-    setNameDraft(nickname);
-    setEditingName(true);
-    setTimeout(() => nameInputRef.current?.focus(), 50);
-  };
-
-  const commitName = () => {
-    setNickname(nameDraft.trim());
-    setEditingName(false);
-  };
-
-  const handleAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > MAX_AVATAR_SIZE) {
-      toast.error(t('profile.fileTooLarge'));
-      return;
-    }
-    if (!file.type.startsWith('image/')) {
-      toast.error(t('profile.invalidFileType'));
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new window.Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = 128;
-        canvas.height = 128;
-        const ctx = canvas.getContext('2d')!;
-        const scale = Math.max(128 / img.width, 128 / img.height);
-        const w = img.width * scale;
-        const h = img.height * scale;
-        ctx.drawImage(img, (128 - w) / 2, (128 - h) / 2, w, h);
-        setAvatar(canvas.toDataURL('image/jpeg', 0.85));
-      };
-      img.src = reader.result as string;
-    };
-    reader.readAsDataURL(file);
-    e.target.value = '';
-  };
-
-  return (
-    <div ref={containerRef} className="relative pl-4 pr-2 pt-3.5 pb-1 w-auto">
-      <input
-        ref={avatarInputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={handleAvatarUpload}
-      />
-
-      {/* ── Collapsed pill (always in flow) ── */}
-      {!open && (
-        <div
-          className="flex items-center gap-2.5 cursor-pointer transition-all duration-200 group rounded-full px-2.5 py-1.5 border border-border/50 text-muted-foreground/70 hover:text-foreground hover:bg-muted/60 active:scale-[0.97]"
-          onClick={() => setOpen(true)}
-        >
-          <div className="shrink-0 relative">
-            <div className="size-8 rounded-full overflow-hidden ring-[1.5px] ring-border/30 group-hover:ring-orange-400/60 dark:group-hover:ring-orange-400/40 transition-all duration-300">
-              <img src={avatar} alt="" className="size-full object-cover" />
-            </div>
-            <div className="absolute -bottom-0.5 -right-0.5 size-3.5 rounded-full bg-white dark:bg-slate-800 border border-border/40 flex items-center justify-center opacity-60 group-hover:opacity-100 transition-opacity">
-              <Pencil className="size-[7px] text-muted-foreground/70" />
-            </div>
-          </div>
-          <div className="flex-1 min-w-0">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="leading-none select-none flex items-center gap-1">
-                  <span className="text-[13px] font-semibold text-foreground/85 group-hover:text-foreground transition-colors">
-                    {t('home.greetingWithName', { name: displayName })}
-                  </span>
-                  <ChevronDown className="size-3 text-muted-foreground/30 group-hover:text-muted-foreground/60 transition-colors shrink-0" />
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" sideOffset={4}>
-                {t('profile.editTooltip')}
-              </TooltipContent>
-            </Tooltip>
-          </div>
-        </div>
-      )}
-
-      {/* ── Expanded panel (absolute, floating) ── */}
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, y: -4, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -4, scale: 0.97 }}
-            transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
-            className="absolute left-4 top-3.5 z-50 w-64"
-          >
-            <div className="rounded-2xl bg-white/95 dark:bg-slate-800/95 backdrop-blur-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06] shadow-[0_1px_8px_-2px_rgba(0,0,0,0.06)] dark:shadow-[0_1px_8px_-2px_rgba(0,0,0,0.3)] px-2.5 py-2">
-              {/* ── Row: avatar + name ── */}
-              <div
-                className="flex items-center gap-2.5 cursor-pointer transition-all duration-200"
-                onClick={() => {
-                  setOpen(false);
-                  setEditingName(false);
-                  setAvatarPickerOpen(false);
-                }}
-              >
-                {/* Avatar */}
-                <div
-                  className="shrink-0 relative cursor-pointer"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setAvatarPickerOpen(!avatarPickerOpen);
-                  }}
-                >
-                  <div className="size-8 rounded-full overflow-hidden ring-[1.5px] ring-orange-300/70 dark:ring-orange-500/40 transition-all duration-300">
-                    <img src={avatar} alt="" className="size-full object-cover" />
-                  </div>
-                  <motion.div
-                    initial={{ scale: 0 }}
-                    animate={{ scale: 1 }}
-                    className="absolute -bottom-0.5 -right-0.5 size-3.5 rounded-full bg-white dark:bg-slate-800 border border-border/60 flex items-center justify-center"
-                  >
-                    <ChevronDown
-                      className={cn(
-                        'size-2 text-muted-foreground/70 transition-transform duration-200',
-                        avatarPickerOpen && 'rotate-180',
-                      )}
-                    />
-                  </motion.div>
-                </div>
-
-                {/* Text */}
-                <div className="flex-1 min-w-0">
-                  {editingName ? (
-                    <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                      <input
-                        ref={nameInputRef}
-                        value={nameDraft}
-                        onChange={(e) => setNameDraft(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') commitName();
-                          if (e.key === 'Escape') {
-                            setEditingName(false);
-                          }
-                        }}
-                        onBlur={commitName}
-                        maxLength={20}
-                        placeholder={t('profile.defaultNickname')}
-                        className="flex-1 min-w-0 h-6 bg-transparent border-b border-border/80 text-[13px] font-semibold text-foreground outline-none placeholder:text-muted-foreground/40"
-                      />
-                      <button
-                        onClick={commitName}
-                        className="shrink-0 size-5 rounded flex items-center justify-center text-orange-500 hover:bg-orange-100 dark:hover:bg-orange-900/30"
-                      >
-                        <Check className="size-3" />
-                      </button>
-                    </div>
-                  ) : (
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        startEditName();
-                      }}
-                      className="group/name inline-flex items-center gap-1 cursor-pointer"
-                    >
-                      <span className="text-[13px] font-semibold text-foreground/85 group-hover/name:text-foreground transition-colors">
-                        {displayName}
-                      </span>
-                      <Pencil className="size-2.5 text-muted-foreground/30 opacity-0 group-hover/name:opacity-100 transition-opacity" />
-                    </span>
-                  )}
-                </div>
-
-                {/* Collapse arrow */}
-                <motion.div
-                  initial={{ opacity: 0, y: -2 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="shrink-0 size-6 rounded-full flex items-center justify-center hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
-                >
-                  <ChevronUp className="size-3.5 text-muted-foreground/50" />
-                </motion.div>
-              </div>
-
-              {/* ── Expandable content ── */}
-              <div className="pt-2" onClick={(e) => e.stopPropagation()}>
-                {/* Avatar picker */}
-                <AnimatePresence>
-                  {avatarPickerOpen && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.15, ease: 'easeInOut' }}
-                      className="overflow-hidden"
-                    >
-                      <div className="p-1 pb-2.5 flex items-center gap-1.5 flex-wrap">
-                        {AVATAR_OPTIONS.map((url) => (
-                          <button
-                            key={url}
-                            onClick={() => setAvatar(url)}
-                            className={cn(
-                              'size-7 rounded-full overflow-hidden bg-gray-50 dark:bg-gray-800 cursor-pointer transition-all duration-150',
-                              'hover:scale-110 active:scale-95',
-                              avatar === url
-                                ? 'ring-2 ring-orange-400 dark:ring-orange-500 ring-offset-0'
-                                : 'hover:ring-1 hover:ring-muted-foreground/30',
-                            )}
-                          >
-                            <img src={url} alt="" className="size-full" />
-                          </button>
-                        ))}
-                        <label
-                          className={cn(
-                            'size-7 rounded-full flex items-center justify-center cursor-pointer transition-all duration-150 border border-dashed',
-                            'hover:scale-110 active:scale-95',
-                            isCustomAvatar(avatar)
-                              ? 'ring-2 ring-orange-400 dark:ring-orange-500 ring-offset-0 border-orange-300 dark:border-orange-600 bg-orange-50 dark:bg-orange-900/30'
-                              : 'border-muted-foreground/30 text-muted-foreground/50 hover:border-muted-foreground/50',
-                          )}
-                          onClick={() => avatarInputRef.current?.click()}
-                          title={t('profile.uploadAvatar')}
-                        >
-                          <ImagePlus className="size-3" />
-                        </label>
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
-                {/* Bio */}
-                <UITextarea
-                  value={bio}
-                  onChange={(e) => setBio(e.target.value)}
-                  placeholder={t('profile.bioPlaceholder')}
-                  maxLength={200}
-                  rows={2}
-                  className="resize-none border-border/40 bg-transparent min-h-[72px] !text-[13px] !leading-relaxed placeholder:!text-[11px] placeholder:!leading-relaxed focus-visible:ring-1 focus-visible:ring-border/60"
-                />
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-// ─── Classroom Card — clean, minimal style ──────────────────────
+// ─── Classroom Card ───────────────────────────────────────────────
 function ClassroomCard({
-  classroom,
-  slide,
-  formatDate,
-  onDelete,
-  onRename,
-  confirmingDelete,
-  onConfirmDelete,
-  onCancelDelete,
-  onClick,
+  classroom, slide, formatDate, confirmingDelete, onDelete, onConfirmDelete, onCancelDelete,
+  onClick, onRenameOpen, folders, currentFolderId, isMoveMenuOpen, onMoveMenuToggle, onMoveToFolder,
+  onDragStart, onDragEnd,
 }: {
-  classroom: StageListItem;
-  slide?: Slide;
-  formatDate: (ts: number) => string;
-  onDelete: (id: string, e: React.MouseEvent) => void;
-  onRename: (id: string, newName: string) => void;
+  classroom: StageListItem; slide?: Slide; formatDate: (ts: number) => string;
   confirmingDelete: boolean;
-  onConfirmDelete: () => void;
-  onCancelDelete: () => void;
-  onClick: () => void;
+  onDelete: (e: React.MouseEvent) => void; onConfirmDelete: () => void; onCancelDelete: () => void;
+  onClick: () => void; onRenameOpen: () => void;
+  folders: FolderItem[]; currentFolderId: string | null;
+  isMoveMenuOpen: boolean; onMoveMenuToggle: () => void; onMoveToFolder: (fid: string | null) => void;
+  onDragStart: () => void; onDragEnd: () => void;
 }) {
   const { t } = useI18n();
   const thumbRef = useRef<HTMLDivElement>(null);
   const [thumbWidth, setThumbWidth] = useState(0);
-  const [editing, setEditing] = useState(false);
-  const [nameDraft, setNameDraft] = useState('');
-  const nameInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const el = thumbRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(([entry]) => {
-      setThumbWidth(Math.round(entry.contentRect.width));
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
+    const ro = new ResizeObserver(([e]) => setThumbWidth(Math.round(e.contentRect.width)));
+    ro.observe(el); return () => ro.disconnect();
   }, []);
 
-  useEffect(() => {
-    if (editing) nameInputRef.current?.focus();
-  }, [editing]);
-
-  const startRename = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setNameDraft(classroom.name);
-    setEditing(true);
-  };
-
-  const commitRename = () => {
-    if (!editing) return;
-    const trimmed = nameDraft.trim();
-    if (trimmed && trimmed !== classroom.name) {
-      onRename(classroom.id, trimmed);
-    }
-    setEditing(false);
-  };
-
   return (
-    <div className="group cursor-pointer" onClick={confirmingDelete ? undefined : onClick}>
-      {/* Thumbnail — large radius, no border, subtle bg */}
+    <div>
       <div
         ref={thumbRef}
-        className="relative w-full aspect-[16/9] rounded-2xl bg-slate-100 dark:bg-slate-800/80 overflow-hidden transition-transform duration-200 group-hover:scale-[1.02]"
+        draggable
+        onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart(); }}
+        onDragEnd={onDragEnd}
+        className={cn(
+          'group relative w-full aspect-[16/9] rounded-2xl bg-slate-100 dark:bg-slate-800/80 overflow-hidden cursor-pointer',
+          'transition-transform duration-200 hover:scale-[1.02] hover:shadow-lg',
+        )}
+        onClick={confirmingDelete ? undefined : onClick}
       >
+        {/* Thumbnail */}
         {slide && thumbWidth > 0 ? (
-          <ThumbnailSlide
-            slide={slide}
-            size={thumbWidth}
-            viewportSize={slide.viewportSize ?? 1000}
-            viewportRatio={slide.viewportRatio ?? 0.5625}
-          />
+          <ThumbnailSlide slide={slide} size={thumbWidth} viewportSize={slide.viewportSize ?? 1000} viewportRatio={slide.viewportRatio ?? 0.5625} />
         ) : !slide ? (
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="size-12 rounded-2xl bg-gradient-to-br from-orange-100 to-blue-100 dark:from-orange-900/30 dark:to-blue-900/30 flex items-center justify-center">
@@ -1193,150 +711,259 @@ function ClassroomCard({
         {classroom.interactiveMode && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <span
-                aria-label={t('toolbar.interactiveModeLabel')}
-                onClick={(e) => e.stopPropagation()}
-                className="absolute bottom-2 left-2 inline-flex items-center justify-center size-5 rounded-full bg-white/70 dark:bg-slate-900/60 text-cyan-600 dark:text-cyan-300 backdrop-blur-sm shadow-sm ring-1 ring-cyan-500/30 z-10"
-              >
+              <span onClick={(e) => e.stopPropagation()}
+                className="absolute bottom-2 left-2 inline-flex items-center justify-center size-5 rounded-full bg-white/70 dark:bg-slate-900/60 text-cyan-600 backdrop-blur-sm shadow-sm ring-1 ring-cyan-500/30 z-10">
                 <Atom className="size-3" />
               </span>
             </TooltipTrigger>
-            {/* Negative sideOffset compensates for the global Tooltip Arrow's
-                rotate-45 bounding box, which Radix reserves as spacing. */}
-            <TooltipContent
-              side="top"
-              align="start"
-              sideOffset={-4}
-              collisionPadding={0}
-              className="text-xs"
-            >
-              {t('toolbar.interactiveModeLabel')}
-            </TooltipContent>
+            <TooltipContent side="top" sideOffset={-4} className="text-xs">{t('toolbar.interactiveModeLabel')}</TooltipContent>
           </Tooltip>
         )}
 
-        {/* Delete — top-right, only on hover */}
+        {/* Hover action buttons */}
         <AnimatePresence>
           {!confirmingDelete && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.15 }}
-            >
-              <Button
-                size="icon"
-                variant="ghost"
-                className="absolute top-2 right-2 size-7 opacity-0 group-hover:opacity-100 transition-opacity bg-black/30 hover:bg-destructive/80 text-white hover:text-white backdrop-blur-sm rounded-full"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDelete(classroom.id, e);
-                }}
-              >
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+              {/* Delete */}
+              <Button size="icon" variant="ghost"
+                className="absolute top-2 right-2 size-7 opacity-0 group-hover:opacity-100 transition-opacity bg-black/30 hover:bg-destructive/80 text-white backdrop-blur-sm rounded-full z-10"
+                onClick={onDelete}>
                 <Trash2 className="size-3.5" />
               </Button>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="absolute top-2 right-11 size-7 opacity-0 group-hover:opacity-100 transition-opacity bg-black/30 hover:bg-black/50 text-white hover:text-white backdrop-blur-sm rounded-full"
-                onClick={startRename}
-              >
+              {/* Rename */}
+              <Button size="icon" variant="ghost"
+                className="absolute top-2 right-11 size-7 opacity-0 group-hover:opacity-100 transition-opacity bg-black/30 hover:bg-black/50 text-white backdrop-blur-sm rounded-full z-10"
+                onClick={(e) => { e.stopPropagation(); onRenameOpen(); }}>
                 <Pencil className="size-3.5" />
               </Button>
+              {/* Move to folder */}
+              <div className="absolute top-2 right-20 z-[91]" onClick={(e) => e.stopPropagation()}>
+                <Button size="icon" variant="ghost"
+                  className="size-7 opacity-0 group-hover:opacity-100 transition-opacity bg-black/30 hover:bg-black/50 text-white backdrop-blur-sm rounded-full"
+                  onClick={(e) => { e.stopPropagation(); onMoveMenuToggle(); }}>
+                  <FolderOpen className="size-3.5" />
+                </Button>
+                {isMoveMenuOpen && (
+                  <div
+                    className="absolute top-full right-0 mt-1 bg-white dark:bg-gray-800 border border-border rounded-xl shadow-2xl z-[95] overflow-hidden min-w-[180px] py-1"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="px-3 pt-2 pb-1.5 text-[10px] font-bold text-muted-foreground/50 uppercase tracking-widest">Move to</div>
+                    <button onClick={() => onMoveToFolder(null)}
+                      className={cn('w-full px-3 py-2 text-left text-sm flex items-center gap-2.5 hover:bg-muted/60 transition-colors',
+                        !currentFolderId && 'text-orange-500 font-medium')}>
+                      <Home className="size-3.5 shrink-0" />
+                      <span className="truncate">Root (My Classrooms)</span>
+                    </button>
+                    {folders.length > 0 && <div className="my-1 h-px bg-border/40" />}
+                    <div className="max-h-48 overflow-y-auto">
+                      {folders.map((f) => (
+                        <button key={f.id} onClick={() => onMoveToFolder(f.id)}
+                          className={cn('w-full px-3 py-2 text-left text-sm flex items-center gap-2.5 hover:bg-muted/60 transition-colors',
+                            currentFolderId === f.id && 'text-orange-500 font-medium')}>
+                          <span style={{ color: f.color }} className="shrink-0">📁</span>
+                          <span className="truncate">{f.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* Inline delete confirmation overlay */}
+        {/* Delete confirm overlay */}
         <AnimatePresence>
           {confirmingDelete && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.15 }}
-              className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/50 backdrop-blur-[6px]"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <span className="text-[13px] font-medium text-white/90">
-                {t('classroom.deleteConfirmTitle')}?
-              </span>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/55 backdrop-blur-[4px]"
+              onClick={(e) => e.stopPropagation()}>
+              <span className="text-[13px] font-semibold text-white">{t('classroom.deleteConfirmTitle')}?</span>
               <div className="flex gap-2">
-                <button
-                  className="px-3.5 py-1 rounded-lg text-[12px] font-medium bg-white/15 text-white/80 hover:bg-white/25 backdrop-blur-sm transition-colors"
-                  onClick={onCancelDelete}
-                >
-                  {t('common.cancel')}
-                </button>
-                <button
-                  className="px-3.5 py-1 rounded-lg text-[12px] font-medium bg-red-500/90 text-white hover:bg-red-500 transition-colors"
-                  onClick={onConfirmDelete}
-                >
-                  {t('classroom.delete')}
-                </button>
+                <button onClick={onCancelDelete} className="px-3.5 py-1 rounded-lg text-xs font-medium bg-white/15 text-white hover:bg-white/25 transition-colors">{t('common.cancel')}</button>
+                <button onClick={onConfirmDelete} className="px-3.5 py-1 rounded-lg text-xs font-medium bg-red-500 text-white hover:bg-red-600 transition-colors">{t('classroom.delete')}</button>
               </div>
             </motion.div>
           )}
         </AnimatePresence>
       </div>
 
-      {/* Info — outside the thumbnail */}
-      <div className="mt-2.5 px-1 flex items-center gap-2">
-        <span className="shrink-0 inline-flex items-center rounded-full bg-orange-100 dark:bg-orange-900/30 px-2 py-0.5 text-[11px] font-medium text-orange-600 dark:text-orange-400">
+      {/* Info row */}
+      <div className="mt-2.5 px-1 flex items-start gap-1.5">
+        <span className="shrink-0 inline-flex items-center rounded-full bg-orange-100 dark:bg-orange-900/30 px-2 py-0.5 text-[11px] font-medium text-orange-600 dark:text-orange-400 whitespace-nowrap">
           {classroom.sceneCount} {t('classroom.slides')} · {formatDate(classroom.updatedAt)}
         </span>
-        {editing ? (
-          <div className="flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
-            <input
-              ref={nameInputRef}
-              value={nameDraft}
-              onChange={(e) => setNameDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') commitRename();
-                if (e.key === 'Escape') setEditing(false);
-              }}
-              onBlur={commitRename}
-              maxLength={100}
-              placeholder={t('classroom.renamePlaceholder')}
-              className="w-full bg-transparent border-b border-orange-400/60 text-[15px] font-medium text-foreground/90 outline-none placeholder:text-muted-foreground/40"
-            />
-          </div>
-        ) : (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <p
-                className="font-medium text-[15px] truncate text-foreground/90 min-w-0 cursor-text"
-                onDoubleClick={startRename}
-              >
-                {classroom.name}
-              </p>
-            </TooltipTrigger>
-            <TooltipContent
-              side="bottom"
-              sideOffset={4}
-              className="!max-w-[min(90vw,32rem)] break-words whitespace-normal"
-            >
-              <div className="flex items-center gap-1.5">
-                <span className="break-all">{classroom.name}</span>
-                <button
-                  className="shrink-0 p-0.5 rounded hover:bg-foreground/10 transition-colors"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    navigator.clipboard.writeText(classroom.name);
-                    toast.success(t('classroom.nameCopied'));
-                  }}
-                >
-                  <Copy className="size-3 opacity-60" />
-                </button>
-              </div>
-            </TooltipContent>
-          </Tooltip>
-        )}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <p className="font-medium text-[14px] truncate text-foreground/90 min-w-0 cursor-pointer leading-tight pt-0.5"
+              onClick={(e) => { e.stopPropagation(); onRenameOpen(); }}>
+              {classroom.name}
+            </p>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={4} className="!max-w-[min(90vw,32rem)] break-words whitespace-normal">
+            <div className="flex items-center gap-1.5">
+              <span className="break-all">{classroom.name}</span>
+              <button className="shrink-0 p-0.5 rounded hover:bg-foreground/10 transition-colors"
+                onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(classroom.name); toast.success(t('classroom.nameCopied')); }}>
+                <Copy className="size-3 opacity-60" />
+              </button>
+            </div>
+          </TooltipContent>
+        </Tooltip>
       </div>
     </div>
   );
 }
 
-export default function Page() {
-  return <HomePage />;
+// ─── Greeting Bar (used in new-classroom page) ────────────────────
+export { GreetingBar };
+
+const MAX_AVATAR_SIZE = 5 * 1024 * 1024;
+function isCustomAvatar(src: string) { return src.startsWith('data:'); }
+
+function GreetingBar() {
+  const { t } = useI18n();
+  const avatar = useUserProfileStore((s) => s.avatar);
+  const nickname = useUserProfileStore((s) => s.nickname);
+  const bio = useUserProfileStore((s) => s.bio);
+  const setAvatar = useUserProfileStore((s) => s.setAvatar);
+  const setNickname = useUserProfileStore((s) => s.setNickname);
+  const setBio = useUserProfileStore((s) => s.setBio);
+  const [open, setOpen] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const [avatarPickerOpen, setAvatarPickerOpen] = useState(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const displayName = nickname || t('profile.defaultNickname');
+
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: MouseEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) { setOpen(false); setEditingName(false); setAvatarPickerOpen(false); }
+    };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [open]);
+
+  const commitName = () => { setNickname(nameDraft.trim()); setEditingName(false); };
+
+  const handleAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > MAX_AVATAR_SIZE) { toast.error(t('profile.fileTooLarge')); return; }
+    if (!file.type.startsWith('image/')) { toast.error(t('profile.invalidFileType')); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new window.Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 128; canvas.height = 128;
+        const ctx = canvas.getContext('2d')!;
+        const scale = Math.max(128 / img.width, 128 / img.height);
+        const w = img.width * scale, h = img.height * scale;
+        ctx.drawImage(img, (128 - w) / 2, (128 - h) / 2, w, h);
+        setAvatar(canvas.toDataURL('image/jpeg', 0.85));
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  return (
+    <div ref={containerRef} className="relative pl-4 pr-2 pt-3.5 pb-1 w-auto">
+      <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarUpload} />
+      {!open && (
+        <div onClick={() => setOpen(true)}
+          className="flex items-center gap-2.5 cursor-pointer group rounded-full px-2.5 py-1.5 border border-border/50 text-muted-foreground/70 hover:text-foreground hover:bg-muted/60 active:scale-[0.97] transition-all">
+          <div className="shrink-0 relative">
+            <div className="size-8 rounded-full overflow-hidden ring-[1.5px] ring-border/30 group-hover:ring-orange-400/60 transition-all">
+              <img src={avatar} alt="" className="size-full object-cover" />
+            </div>
+            <div className="absolute -bottom-0.5 -right-0.5 size-3.5 rounded-full bg-white dark:bg-slate-800 border border-border/40 flex items-center justify-center opacity-60 group-hover:opacity-100 transition-opacity">
+              <Pencil className="size-[7px] text-muted-foreground/70" />
+            </div>
+          </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="text-[13px] font-semibold text-foreground/85 group-hover:text-foreground transition-colors select-none flex items-center gap-1">
+                {t('home.greetingWithName', { name: displayName })}
+                <ChevronDown className="size-3 text-muted-foreground/30 shrink-0" />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" sideOffset={4}>{t('profile.editTooltip')}</TooltipContent>
+          </Tooltip>
+        </div>
+      )}
+      <AnimatePresence>
+        {open && (
+          <motion.div initial={{ opacity: 0, y: -4, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -4, scale: 0.97 }}
+            className="absolute left-4 top-3.5 z-50 w-64">
+            <div className="rounded-2xl bg-white/95 dark:bg-slate-800/95 backdrop-blur-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06] shadow-lg px-2.5 py-2">
+              <div className="flex items-center gap-2.5 cursor-pointer" onClick={() => { setOpen(false); setEditingName(false); setAvatarPickerOpen(false); }}>
+                <div className="shrink-0 relative cursor-pointer" onClick={(e) => { e.stopPropagation(); setAvatarPickerOpen(!avatarPickerOpen); }}>
+                  <div className="size-8 rounded-full overflow-hidden ring-[1.5px] ring-orange-300/70">
+                    <img src={avatar} alt="" className="size-full object-cover" />
+                  </div>
+                  <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }}
+                    className="absolute -bottom-0.5 -right-0.5 size-3.5 rounded-full bg-white dark:bg-slate-800 border border-border/60 flex items-center justify-center">
+                    <ChevronDown className={cn('size-2 text-muted-foreground/70 transition-transform', avatarPickerOpen && 'rotate-180')} />
+                  </motion.div>
+                </div>
+                <div className="flex-1 min-w-0">
+                  {editingName ? (
+                    <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                      <input ref={nameInputRef} value={nameDraft} onChange={(e) => setNameDraft(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') commitName(); if (e.key === 'Escape') setEditingName(false); }}
+                        onBlur={commitName} maxLength={20}
+                        className="flex-1 min-w-0 h-6 bg-transparent border-b border-border/80 text-[13px] font-semibold outline-none" />
+                      <button onClick={commitName} className="size-5 rounded flex items-center justify-center text-orange-500"><Check className="size-3" /></button>
+                    </div>
+                  ) : (
+                    <span onClick={(e) => { e.stopPropagation(); setNameDraft(nickname); setEditingName(true); setTimeout(() => nameInputRef.current?.focus(), 50); }}
+                      className="group/name inline-flex items-center gap-1 cursor-pointer">
+                      <span className="text-[13px] font-semibold text-foreground/85">{displayName}</span>
+                      <Pencil className="size-2.5 text-muted-foreground/30 opacity-0 group-hover/name:opacity-100 transition-opacity" />
+                    </span>
+                  )}
+                </div>
+                <div className="shrink-0 size-6 rounded-full flex items-center justify-center hover:bg-black/[0.04] transition-colors">
+                  <ChevronUp className="size-3.5 text-muted-foreground/50" />
+                </div>
+              </div>
+              <div className="pt-2" onClick={(e) => e.stopPropagation()}>
+                <AnimatePresence>
+                  {avatarPickerOpen && (
+                    <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                      <div className="p-1 pb-2.5 flex items-center gap-1.5 flex-wrap">
+                        {AVATAR_OPTIONS.map((url) => (
+                          <button key={url} onClick={() => setAvatar(url)}
+                            className={cn('size-7 rounded-full overflow-hidden bg-gray-50 dark:bg-gray-800 cursor-pointer transition-all hover:scale-110 active:scale-95',
+                              avatar === url ? 'ring-2 ring-orange-400' : 'hover:ring-1 hover:ring-muted-foreground/30')}>
+                            <img src={url} alt="" className="size-full" />
+                          </button>
+                        ))}
+                        <label className={cn('size-7 rounded-full flex items-center justify-center cursor-pointer transition-all border border-dashed hover:scale-110 active:scale-95',
+                          isCustomAvatar(avatar) ? 'ring-2 ring-orange-400 border-orange-300 bg-orange-50' : 'border-muted-foreground/30 text-muted-foreground/50')}
+                          onClick={() => avatarInputRef.current?.click()}>
+                          <ImagePlus className="size-3" />
+                        </label>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+                <UITextarea value={bio} onChange={(e) => setBio(e.target.value)} placeholder={t('profile.bioPlaceholder')} maxLength={200} rows={2}
+                  className="resize-none border-border/40 bg-transparent min-h-[72px] !text-[13px] !leading-relaxed placeholder:!text-[11px] focus-visible:ring-1 focus-visible:ring-border/60" />
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
 }
+
+export default function Page() { return <HomePage />; }

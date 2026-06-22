@@ -14,7 +14,7 @@ import { generateText } from 'ai';
 import { resolveModel } from '@/lib/server/resolve-model';
 import type { VlmScore } from './types';
 
-const RUBRIC_PROMPT = `You are evaluating a classroom whiteboard screenshot from an AI teaching assistant. Score like a teacher reviewing their own board work for an English-only classroom. Any Chinese or CJK characters are a serious defect.
+const RUBRIC_PROMPT = `You are evaluating a classroom whiteboard screenshot from an AI teaching assistant. Score like a teacher reviewing their own board work for a student's benefit.
 
 Context: This is a real-time teaching whiteboard, NOT a poster or infographic.
 - Empty space is NORMAL and NOT a problem — teachers write in one area at a time.
@@ -25,7 +25,7 @@ Score each dimension from 1 to 10 (10 = perfect, 1 = broken):
 
 1. readability — Can a student read every element easily?
    - Font size CONSISTENCY is critical: penalize heavily if some text is 2x+ larger than other text on the same board (e.g., one giant title + tiny formulas).
-   - Are characters crisp? Any non-English or CJK text present? Penalize heavily even if it renders correctly.
+   - Are characters crisp? Any Chinese rendered as boxes or missing glyphs?
    - Penalize text styled like UI components (gray boxes, card backgrounds) that don't match handwritten whiteboard feel.
 
 2. overlap — Are elements clear of each other, AND does new content respect existing content?
@@ -36,7 +36,6 @@ Score each dimension from 1 to 10 (10 = perfect, 1 = broken):
 3. rendering_correctness — Are formulas, shapes, and symbols drawn correctly?
    - LaTeX must render: raw source like "\\\\frac", "\\\\theta", or garbled chunks like "0ext", "Gsinheta", "heta" = major penalty.
    - Subscripts/superscripts must render: "G_x" shown as raw underscore (not Gₓ) = penalty.
-   - Any Chinese or CJK text inside LaTeX math mode = severe penalty.
    - Diagram ACCURACY matters: a parabola drawn as V-shape straight lines, a circle drawn as ellipse-when-should-be-circle, an angle labeled wrong = penalty.
    - 10 = all math/shapes render correctly and match the concept; 1 = multiple broken renders OR fundamentally wrong diagrams.
 

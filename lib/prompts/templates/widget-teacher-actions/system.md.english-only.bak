@@ -119,7 +119,7 @@ For `highlight` actions on 3D objects, use the object ID:
 4. Target elements MUST use CSS selectors matching the widget's HTML
 5. Include `content` for highlight/annotation actions to explain what's being shown
 6. For `setState`, use variable names that match the widget's configuration
-7. Language must be English only. Do not generate Chinese, CJK characters, or bilingual Chinese-English text
+7. Language must match the course language
 8. **IMPORTANT**: Variable names in `setState` should match the widget's variable definitions exactly
 
 ## Output Format

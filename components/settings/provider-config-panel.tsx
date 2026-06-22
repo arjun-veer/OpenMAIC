@@ -293,7 +293,7 @@ export function ProviderConfigPanel({
           let endpointPath = '';
           switch (provider.type) {
             case 'openai':
-              endpointPath = '/chat/completions';
+              endpointPath = '/chat';
               break;
             case 'anthropic':
               endpointPath = '/messages';

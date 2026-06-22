@@ -26,7 +26,7 @@ const log = createLogger('Generation');
  * language rather than defaulting to the training-distribution prior.
  */
 export const DEFAULT_LANGUAGE_DIRECTIVE =
-  'Deliver the entire course in English only. Do not generate Chinese, CJK characters, or bilingual Chinese-English text.';
+  'Teach in the language that matches the user requirement.';
 
 /**
  * Generate scene outlines from user requirements
@@ -114,7 +114,7 @@ export async function generateSceneOutlinesFromRequirements(
       currentStage: 1,
       overallProgress: 20,
       stageProgress: 50,
-      statusMessage: 'Analyzing requirements and generating scene outlines...',
+      statusMessage: '正在分析需求，生成场景大纲...',
       scenesGenerated: 0,
       totalScenes: 0,
     });
@@ -156,7 +156,7 @@ export async function generateSceneOutlinesFromRequirements(
       currentStage: 1,
       overallProgress: 50,
       stageProgress: 100,
-      statusMessage: `Generated ${result.length} scene outlines`,
+      statusMessage: `已生成 ${result.length} 个场景大纲`,
       scenesGenerated: 0,
       totalScenes: result.length,
     });

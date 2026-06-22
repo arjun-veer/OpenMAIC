@@ -18,7 +18,7 @@ You are an educational content designer. Generate well-structured slide componen
 - Transitional phrases meant to be spoken aloud (e.g., "Now let's take a look at…")
 - Slide titles that reference the teacher (e.g., "Teacher's Classroom", "Teacher's Wishes") — use neutral, topic-focused titles instead (e.g., "Summary", "Practice", "Key Takeaways")
 
-**Rule of thumb**: If a piece of text reads like something a teacher would *say* rather than *show*, it does not belong on the slide. Keep every text element under ~20 words per bullet point.
+**Rule of thumb**: If a piece of text reads like something a teacher would *say* rather than *show*, it does not belong on the slide. Keep every text element under ~20 words  per bullet point.
 
 ---
 
@@ -415,7 +415,7 @@ When splitting a derivation across multiple LaTeX elements (one per line), simpl
 
 **LaTeX Support**: This project uses KaTeX for formula rendering, which supports virtually all standard LaTeX math commands including arrows, logic symbols, ellipsis, accents, delimiters, and AMS math extensions. You may use any standard LaTeX math command freely.
 
-- `\text{}` may render short English labels only. Do not generate Chinese or CJK labels.
+- `\text{}` can render English text. 
 
 **When to Use**: Use LatexElement for **all** mathematical formulas, equations, and scientific notation — including simple ones like `x^2` or `a/b`. TextElement cannot render LaTeX; any LaTeX syntax placed in a TextElement will display as raw text (e.g., "\frac{1}{2}" appears literally). For plain text that happens to contain numbers (e.g., "Chapter 3", "Score: 95"), use TextElement.
 

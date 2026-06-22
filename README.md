@@ -528,7 +528,7 @@ Optional config in `~/.openclaw/openclaw.json`:
 - **Text-to-Speech** — Multiple voice providers with customizable voices
 - **Speech Recognition** — Talk to your AI teacher using your microphone
 - **Web Search** — Agents search the web for up-to-date information during class
-- **i18n** — Interface supports Chinese, English, Japanese, and Russian
+- **i18n** — Interface supports only english
 - **Dark Mode** — Easy on the eyes for late-night study sessions
 
 ---

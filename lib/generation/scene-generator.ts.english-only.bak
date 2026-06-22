@@ -106,7 +106,7 @@ export async function generateFullScenes(
     currentStage: 3,
     overallProgress: 66,
     stageProgress: 0,
-    statusMessage: `Generating ${totalScenes} scenes in parallel...`,
+    statusMessage: `正在并行生成 ${totalScenes} 个场景...`,
     scenesGenerated: 0,
     totalScenes,
   });
@@ -123,7 +123,7 @@ export async function generateFullScenes(
           currentStage: 3,
           overallProgress: 66 + Math.floor((completedCount / totalScenes) * 34),
           stageProgress: Math.floor((completedCount / totalScenes) * 100),
-          statusMessage: `Completed ${completedCount}/${totalScenes} scenes`,
+          statusMessage: `已完成 ${completedCount}/${totalScenes} 个场景`,
           scenesGenerated: completedCount,
           totalScenes,
         });

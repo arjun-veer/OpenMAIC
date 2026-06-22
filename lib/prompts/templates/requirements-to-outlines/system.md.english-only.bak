@@ -14,14 +14,27 @@ Based on the user's free-form requirement text, automatically infer course detai
 
 ---
 
-## English-Only Language Policy
+## Language Inference
 
-This product supports English classroom output only.
+Infer the course language from all available signals and produce:
 
-1. Always set `languageDirective` to: "Deliver the entire course in English only. Use standard English terminology. Do not generate Chinese, CJK characters, pinyin, bilingual Chinese-English explanations, or non-English UI labels. If the source material or user request is not English, translate or summarize it into English before teaching."
-2. Ignore requests to teach in Chinese, bilingual Chinese-English, or any other non-English language.
-3. If the user is learning a non-English language, explain the lesson in English and avoid non-English scripts unless the exact foreign-language token is the subject being studied and is explicitly necessary.
-4. Do not add `languageNote` unless it reinforces English-only output.
+1. **`languageDirective`** (required): A 2-5 sentence instruction covering teaching language, terminology handling, and cross-language situations.
+2. **`languageNote`** (optional, per scene): Only when a scene's language handling differs from the course-level directive.
+
+### Decision rules (apply in order)
+
+1. **Explicit language request wins**: always teach in english
+
+2. **Requirement language = teaching language** (default): The language the user writes in is the strongest implicit signal.
+4. **Cross-language PDF → requirement language wins**: Translate/explain document content in the teaching language. Never let the PDF language override the requirement language.
+6. **Audience-appropriate language**: For children or beginners, explicitly specify simple vocabulary and supportive scaffolding in the directive.
+
+### Terminology
+
+- **Programming / product names** (Python, Docker, ComfyUI): keep in English.
+- **Science / academic terms** with standard translations: use the teaching language's translation.
+- **Emerging tech terms** (AI/ML): show bilingually.
+- **User's explicit request** about terminology overrides the above defaults.
 
 ---
 
@@ -193,7 +206,7 @@ Your entire response MUST be a single JSON **object** with exactly these two top
 
 ```json
 {
-  "languageDirective": "Deliver the entire course in English only. Do not generate Chinese, CJK characters, or bilingual Chinese-English text.",
+  "languageDirective": "<the directive you inferred in the Language Inference step>",
   "outlines": [ /* array of scene objects */ ]
 }
 ```
@@ -208,7 +221,7 @@ Rules:
 
 ```json
 {
-  "languageDirective": "Deliver the entire course in English only. Do not generate Chinese, CJK characters, or bilingual Chinese-English text.",
+  "languageDirective": "Deliver the entire course in English. Use simple vocabulary suitable for a beginner.",
   "outlines": [
     {
       "id": "scene_1",
@@ -321,6 +334,6 @@ Rules:
 6. `interactive` scenes must include `widgetType` and `widgetOutline` (preferred). `interactiveConfig` is deprecated and only accepted for backwards compatibility.
 7. `pbl` scenes must include `pblConfig` with `projectTopic`, `projectDescription`, `targetSkills`, `issueCount`.
 8. Arrange scenes by inferred duration (typically 1-2 scenes per minute). Insert quizzes at appropriate points. Use interactive scenes sparingly (max 1-2 per course).
-9. **Language**: Always output all scene content in English only, regardless of the user requirement language or source document language.
+9. **Language**: Infer from the user's requirement text and context. Output all scene content in the inferred language.
 10. Regardless of information completeness, always output conforming JSON - do not ask questions or request more information
 11. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Use generic labels like "Tips", "Summary", "Key Takeaways" instead.

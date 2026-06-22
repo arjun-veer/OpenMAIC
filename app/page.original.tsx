@@ -248,7 +248,6 @@ export default function LandingPage() {
             <a href="#interactive" className="hover:text-orange-500 transition-colors">Interactive</a>
             <a href="#how-it-works" className="hover:text-orange-500 transition-colors">How It Works</a>
             <a href="#reviews" className="hover:text-orange-500 transition-colors">Reviews</a>
-            <a href="/chat" className="hover:text-orange-500 transition-colors">Chat</a>
           </div>
           <Button
             onClick={() => router.push('/dashboard')}

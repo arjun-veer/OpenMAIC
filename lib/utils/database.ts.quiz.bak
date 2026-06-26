@@ -9,7 +9,6 @@ import type {
   ToolCallRequest,
 } from '@/lib/types/chat';
 import type { SceneOutline } from '@/lib/types/generation';
-import type { QuizAttempt } from '@/lib/types/quiz';
 import type { UIMessage } from 'ai';
 import { createLogger } from '@/lib/logger';
 
@@ -186,11 +185,6 @@ export interface VoiceProfileRecord {
   updatedAt: number;
 }
 
-/**
- * QuizAttempt table - Browser-local generated quiz submissions
- */
-export type QuizAttemptRecord = QuizAttempt;
-
 /** Build the compound primary key for mediaFiles: `${stageId}:${elementId}` */
 export function mediaFileKey(stageId: string, elementId: string): string {
   return `${stageId}:${elementId}`;
@@ -199,7 +193,7 @@ export function mediaFileKey(stageId: string, elementId: string): string {
 // ==================== Database Definition ====================
 
 const DATABASE_NAME = 'MAIC-Database';
-const _DATABASE_VERSION = 11;
+const _DATABASE_VERSION = 10;
 
 /**
  * MAIC Database Instance
@@ -217,7 +211,6 @@ class MAICDatabase extends Dexie {
   mediaFiles!: EntityTable<MediaFileRecord, 'id'>;
   generatedAgents!: EntityTable<GeneratedAgentRecord, 'id'>;
   voiceProfiles!: EntityTable<VoiceProfileRecord, 'id'>;
-  quizAttempts!: EntityTable<QuizAttemptRecord, 'id'>;
 
   constructor() {
     super(DATABASE_NAME);
@@ -384,22 +377,6 @@ class MAICDatabase extends Dexie {
       generatedAgents: 'id, stageId',
       voiceProfiles: 'id, providerId, kind, updatedAt',
     });
-
-    // Version 11: Add generated quiz attempts.
-    this.version(11).stores({
-      stages: 'id, updatedAt',
-      scenes: 'id, stageId, order, [stageId+order]',
-      audioFiles: 'id, createdAt',
-      imageFiles: 'id, createdAt',
-      snapshots: '++id',
-      chatSessions: 'id, stageId, [stageId+createdAt]',
-      playbackState: 'stageId',
-      stageOutlines: 'stageId',
-      mediaFiles: 'id, stageId, [stageId+type]',
-      generatedAgents: 'id, stageId',
-      voiceProfiles: 'id, providerId, kind, updatedAt',
-      quizAttempts: 'id, topic, submittedAt',
-    });
   }
 }
 
@@ -442,14 +419,12 @@ export async function exportDatabase(): Promise<{
   scenes: SceneRecord[];
   chatSessions: ChatSessionRecord[];
   playbackState: PlaybackStateRecord[];
-  quizAttempts: QuizAttemptRecord[];
 }> {
   return {
     stages: await db.stages.toArray(),
     scenes: await db.scenes.toArray(),
     chatSessions: await db.chatSessions.toArray(),
     playbackState: await db.playbackState.toArray(),
-    quizAttempts: await db.quizAttempts.toArray(),
   };
 }
 
@@ -461,17 +436,15 @@ export async function importDatabase(data: {
   scenes?: SceneRecord[];
   chatSessions?: ChatSessionRecord[];
   playbackState?: PlaybackStateRecord[];
-  quizAttempts?: QuizAttemptRecord[];
 }): Promise<void> {
   await db.transaction(
     'rw',
-    [db.stages, db.scenes, db.chatSessions, db.playbackState, db.quizAttempts],
+    [db.stages, db.scenes, db.chatSessions, db.playbackState],
     async () => {
       if (data.stages) await db.stages.bulkPut(data.stages);
       if (data.scenes) await db.scenes.bulkPut(data.scenes);
       if (data.chatSessions) await db.chatSessions.bulkPut(data.chatSessions);
       if (data.playbackState) await db.playbackState.bulkPut(data.playbackState);
-      if (data.quizAttempts) await db.quizAttempts.bulkPut(data.quizAttempts);
     },
   );
   log.info('Database imported successfully');
@@ -537,6 +510,5 @@ export async function getDatabaseStats() {
     stageOutlines: await db.stageOutlines.count(),
     mediaFiles: await db.mediaFiles.count(),
     generatedAgents: await db.generatedAgents.count(),
-    quizAttempts: await db.quizAttempts.count(),
   };
 }

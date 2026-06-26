@@ -11,7 +11,7 @@ const log = createLogger('AI Chat API');
 
 export const maxDuration = 60;
 
-interface AIChatRequest {
+interface AIChatRequest { 
   messages: UIMessage[];
   apiKey?: string;
   baseUrl?: string;

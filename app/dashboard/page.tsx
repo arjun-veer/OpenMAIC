@@ -37,12 +37,33 @@ import { useImportFolder } from '@/lib/import/use-import-folder';
 const log = createLogger('Home');
 const FOLDERS_KEY = 'aiguru_folders';
 const FOLDER_MAP_KEY = 'aiguru_classroom_folders';
+const FOLDERS_INITIALIZED_KEY = 'aiguru_folders_initialized';
 
 // ─── Types ──────────────────────────────────────────────────────
 interface FolderItem {
-  id: string; name: string; color: string; createdAt: number; parentId: string | null;
+  id: string; name: string; color: string; createdAt: number; parentId: string | null; icon?: string; subject?: string;
 }
 const FOLDER_COLORS = ['#f97316','#3b82f6','#8b5cf6','#10b981','#ec4899','#f59e0b','#06b6d4','#6366f1'];
+
+// ─── Subject Folder Configuration ──────────────────────────────
+interface SubjectConfig {
+  name: string;
+  icon: string;
+  color: string;
+  description: string;
+}
+const DEFAULT_SUBJECTS: Record<string, SubjectConfig> = {
+  science: { name: 'Science', icon: '🔬', color: '#06b6d4', description: 'Physics, Chemistry, Biology' },
+  mathematics: { name: 'Mathematics', icon: '∑', color: '#3b82f6', description: 'Algebra, Geometry, Calculus' },
+  history: { name: 'History', icon: '📜', color: '#8b5cf6', description: 'World History, Ancient Civilizations' },
+  language: { name: 'Language & Literature', icon: '📚', color: '#ec4899', description: 'English, Writing, Grammar' },
+  geography: { name: 'Geography', icon: '🌍', color: '#10b981', description: 'World Geography, Maps' },
+  politics: { name: 'Politics & Society', icon: '🏛️', color: '#f59e0b', description: 'Civics, Government, Social Studies' },
+  arts: { name: 'Arts & Culture', icon: '🎨', color: '#f97316', description: 'Art, Music, Drama' },
+  sports: { name: 'Physical Education', icon: '⚽', color: '#ef4444', description: 'Sports, Fitness, Health' },
+  technology: { name: 'Technology & IT', icon: '💻', color: '#6366f1', description: 'Computer Science, Programming' },
+  business: { name: 'Business & Economics', icon: '💼', color: '#14b8a6', description: 'Economics, Business Studies' },
+};
 
 function loadFolders(): FolderItem[] {
   try { return JSON.parse(localStorage.getItem(FOLDERS_KEY) ?? '[]'); } catch { return []; }
@@ -55,6 +76,29 @@ function loadFolderMap(): Record<string,string> {
 }
 function saveFolderMap(m: Record<string,string>) {
   try { localStorage.setItem(FOLDER_MAP_KEY, JSON.stringify(m)); } catch {}
+}
+
+// ─── Initialize default subject folders ──────────────────────────
+function initializeDefaultFolders() {
+  try {
+    const initialized = localStorage.getItem(FOLDERS_INITIALIZED_KEY);
+    if (initialized) return; // Already initialized
+    
+    const defaultFolders: FolderItem[] = Object.entries(DEFAULT_SUBJECTS).map(([key, config]) => ({
+      id: nanoid(),
+      name: config.name,
+      color: config.color,
+      icon: config.icon,
+      subject: key,
+      createdAt: Date.now(),
+      parentId: null,
+    }));
+    
+    saveFolders(defaultFolders);
+    localStorage.setItem(FOLDERS_INITIALIZED_KEY, 'true');
+  } catch (err) {
+    log.error('Failed to initialize default folders:', err);
+  }
 }
 
 // ─── Rename Modal ───────────────────────────────────────────────
@@ -151,6 +195,7 @@ function HomePage() {
 
   // Init from localStorage
   useEffect(() => {
+    initializeDefaultFolders();
     setFolders(loadFolders());
     setFolderMap(loadFolderMap());
   }, []);
@@ -487,7 +532,7 @@ function HomePage() {
                       i === breadcrumbPath.length - 1
                         ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 font-semibold'
                         : 'text-muted-foreground hover:text-foreground hover:bg-muted/50')}>
-                    <span style={{ color: folder.color }}>📁</span> {folder.name}
+                    <span>{folder.icon || '📁'}</span> {folder.name}
                   </button>
                 </span>
               ))}
@@ -631,7 +676,11 @@ function FolderCard({
       >
         {/* Folder content */}
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 select-none">
-          <FolderOpen className="size-12 opacity-60 transition-transform group-hover:scale-110" style={{ color: folder.color }} />
+          {folder.icon ? (
+            <span className="text-5xl transition-transform group-hover:scale-110">{folder.icon}</span>
+          ) : (
+            <FolderOpen className="size-12 opacity-60 transition-transform group-hover:scale-110" style={{ color: folder.color }} />
+          )}
           <span className="text-xs font-semibold opacity-60" style={{ color: folder.color }}>
             {classroomCount} {classroomCount === 1 ? 'classroom' : 'classrooms'}
           </span>
